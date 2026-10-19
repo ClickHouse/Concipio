@@ -39,7 +39,8 @@ walkthrough will ask the human to confirm them.
 Dispatch small-model sub-agents. Each one loops:
 
 1. Run `cpo next`. It returns one span with its code and the concepts that
-   might fit it, or reports that nothing remains.
+   might fit it, or reports that nothing remains. Lines marked `+` or `-`
+   are what the change touched; classify that change.
 2. Do one of three things:
    - `cpo attach <span> <concept>`, adding `--role test` for test code;
    - propose a new concept, with a name, a claim specific enough to check,

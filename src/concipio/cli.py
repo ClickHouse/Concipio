@@ -3,11 +3,13 @@
 import argparse
 import json
 import re
+import subprocess
 import sys
 import textwrap
 from dataclasses import asdict
+from importlib import resources
 
-from . import docs
+from . import docs, review
 
 
 def emit(data, human, as_json):
@@ -90,33 +92,177 @@ def cmd_tree(args, defs):
     return 0
 
 
-def main(argv=None):
+REVIEW_COMMANDS = {
+    ("statement", "add"): review.cmd_statement_add,
+    ("concept", "add"): review.cmd_concept_add,
+    ("concept", "edit"): review.cmd_concept_edit,
+    ("concept", "merge"): review.cmd_concept_merge,
+    ("attach", None): review.cmd_attach,
+    ("detach", None): review.cmd_detach,
+    ("unjustified", None): review.cmd_unjustified,
+    ("next", None): review.cmd_next,
+    ("check", None): review.cmd_check,
+    ("status", None): review.cmd_status,
+    ("record", None): review.cmd_record,
+}
+
+
+def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     fmt = common.add_mutually_exclusive_group()
     fmt.add_argument("--json", action="store_true", default=None,
                      help="print JSON (the default when output is not a terminal)")
-    fmt.add_argument("--text", dest="json", action="store_false",
+    fmt.add_argument("--human", dest="json", action="store_false",
                      help="print text (the default on a terminal)")
-    parser = argparse.ArgumentParser(prog="cpo")
+    parser = argparse.ArgumentParser(
+        prog="cpo", description="Map every changed line of code to the concept it serves.")
     sub = parser.add_subparsers(dest="command", required=True)
-    show = sub.add_parser("show", parents=[common],
-                          help="show tags with their names, text, and citations")
-    show.add_argument("tags", nargs="+", help="tags, IDs, or lists such as '[M3, R4]'")
-    lst = sub.add_parser("list", parents=[common],
-                         help="list defined tags with their names")
-    lst.add_argument("namespaces", nargs="*", help="limit to these namespaces, such as M or R")
-    tree = sub.add_parser("tree", parents=[common],
-                          help="show how statements refine one another")
-    tree.add_argument("tags", nargs="*", help="roots to start from (default: all)")
-    args = parser.parse_args(argv)
-    if args.json is None:
-        args.json = not sys.stdout.isatty()
 
+    def add(name, help_, parent=sub):
+        return parent.add_parser(name, parents=[common], help=help_)
+
+    show = add("show", "show tags, spans, concepts, or statements")
+    show.add_argument("tags", nargs="+", help="tags, IDs, or lists such as '[M3, R4]'")
+    lst = add("list", "list defined tags with their names")
+    lst.add_argument("namespaces", nargs="*", help="limit to these namespaces, such as M or R")
+    tree = add("tree", "show how statements refine one another")
+    tree.add_argument("tags", nargs="*", help="roots to start from (default: all)")
+
+    rv = sub.add_parser("review", help="start a review").add_subparsers(dest="sub", required=True)
+    init = add("init", "pin a change and list its spans", rv)
+    init.add_argument("range", help="<base>..<head>")
+    init.add_argument("--stacked-on", action="append", metavar="BASE..HEAD",
+                      help="a change this one is stacked on, as context")
+    init.add_argument("--pr", action="append", metavar="PR",
+                      help="snapshot a pull request's title and description as design "
+                           "text: OWNER/REPO#N, a URL, or N for the default repository")
+    init.add_argument("--design-file", action="append", metavar="PATH",
+                      help="snapshot a file as design text")
+    init.add_argument("--limit", type=int, default=review.spans_mod.DEFAULT_LIMIT,
+                      help="longest declaration a hunk widens to (default %(default)s lines)")
+
+    st = sub.add_parser("statement", help="design statements").add_subparsers(dest="sub", required=True)
+    sa = add("add", "add a given or drafted statement", st)
+    sa.add_argument("--quote", help="exact text from the design text (a given statement)")
+    sa.add_argument("--text", help="the statement, if it differs from the quote")
+    sa.add_argument("--drafted", action="store_true", help="a statement written from the code")
+
+    co = sub.add_parser("concept", help="concepts").add_subparsers(dest="sub", required=True)
+    ca = add("add", "add a concept", co)
+    ca.add_argument("--name", required=True)
+    ca.add_argument("--claim", help="a checkable claim citing its evidence spans, such as S12")
+    ca.add_argument("--parent", help="a statement (D1) or broader concept (C1)")
+    ce = add("edit", "change a concept", co)
+    ce.add_argument("concept")
+    ce.add_argument("--name")
+    ce.add_argument("--claim")
+    ce.add_argument("--parent")
+    cm = add("merge", "merge one concept into another", co)
+    cm.add_argument("source")
+    cm.add_argument("into")
+
+    at = add("attach", "attach a span to a concept")
+    at.add_argument("span")
+    at.add_argument("concept")
+    at.add_argument("--role", choices=["implementation", "test"], default="implementation")
+    de = add("detach", "detach a span from a concept")
+    de.add_argument("span")
+    de.add_argument("concept")
+    un = add("unjustified", "mark a span unjustified")
+    un.add_argument("span")
+    un.add_argument("--reason", required=True)
+    nx = add("next", "give the next piece of work")
+    nx.add_argument("--path", help="only spans in paths that start with this")
+    nx.add_argument("--brief", action="store_true",
+                    help="omit the concept list, for an agent that already has it")
+    rc = add("record", "record tokens an agent spent on the review")
+    rc.add_argument("--model", required=True)
+    rc.add_argument("--tokens", type=int, default=0, help="total, when no split is known")
+    rc.add_argument("--input-tokens", type=int, default=0)
+    rc.add_argument("--output-tokens", type=int, default=0)
+    rc.add_argument("--spans", type=int, default=0, help="spans the tokens covered")
+    rc.add_argument("--note")
+    rv2 = add("reviewable", "exit 0 if a change is ready for human review")
+    rv2.add_argument("target", help="a pull request (OWNER/REPO#N, URL, or N) or <base>..<head>")
+    rv2.add_argument("--stacked-on", action="append", metavar="BASE..HEAD")
+    rv2.add_argument("--design-file", action="append", metavar="PATH")
+    rv2.add_argument("--limit", type=int, default=review.spans_mod.DEFAULT_LIMIT)
+    add("check", "give the verdicts")
+    add("status", "report progress and stalls")
+    hp = sub.add_parser("help", help="print guidance").add_subparsers(dest="sub", required=True)
+    hp.add_parser("agent", help="print the protocol for an agent running a review")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if getattr(args, "json", None) is None:
+        args.json = not sys.stdout.isatty()
+    try:
+        return dispatch(args)
+    except (review.ReviewError, subprocess.CalledProcessError) as e:
+        msg = e.stderr.strip() if isinstance(e, subprocess.CalledProcessError) else str(e)
+        print(f"cpo: {msg}", file=sys.stderr)
+        return 1
+
+
+def dispatch(args):
+    if args.command == "help":
+        print(resources.files("concipio").joinpath("prompts/agent.md").read_text())
+        return 0
+    repo = docs.repo_root()
+    key = (args.command, getattr(args, "sub", None))
+    if args.command in ("review", "reviewable") or key in REVIEW_COMMANDS:
+        with review.Store(repo).lock():
+            return run_review_command(repo, key, args)
     _, defs, errors = docs.load()
+
     for e in errors:
         print(f"cpo: {e}", file=sys.stderr)
-    status = {"show": cmd_show, "list": cmd_list, "tree": cmd_tree}[args.command](args, defs)
+    if args.command == "show":
+        status = show_mixed(args, defs, repo)
+    else:
+        status = {"list": cmd_list, "tree": cmd_tree}[args.command](args, defs)
     return status or (1 if errors else 0)
+
+
+def run_review_command(repo, key, args):
+    if args.command == "review":
+        data, human = review.cmd_init(repo, args)
+        emit(data, human, args.json)
+        return 0
+    if args.command == "reviewable":
+        data, human, status = review.cmd_reviewable(repo, args)
+        emit(data, human, args.json)
+        return status
+    data, human = REVIEW_COMMANDS[key](review.Review(repo), args)
+    emit(data, human, args.json)
+    if args.command == "check":
+        return 0 if data["traced"] and data["explained"] else 1
+    return 0
+
+
+def show_mixed(args, defs, repo):
+    """Show review items (S, C, and D IDs) from the store, and tags from
+    the docs."""
+    try:
+        r = review.Review(repo)
+    except review.ReviewError:
+        r = None
+    queries = [q for arg in args.tags for q in re.split(r"[,\s]+", arg.strip("[]")) if q]
+    rest, out, status = [], [], 0
+    for q in queries:
+        item = review.show_item(r, q) if r and re.fullmatch(r"[SCD]\d+", q) else None
+        if item:
+            out.append(item)
+        else:
+            rest.append(q)
+    if out:
+        emit([d for d, _ in out], "\n\n".join(h for _, h in out), args.json)
+    if rest:
+        args.tags = rest
+        status = cmd_show(args, defs)
+    return status
 
 
 if __name__ == "__main__":

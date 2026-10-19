@@ -3,7 +3,11 @@ name = "concipio"
 version = "0.0.1"
 description = "Map every changed line of code to the concept it serves"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "tree-sitter>=0.26.0",
+    "tree-sitter-bash>=0.25.1",
+    "tree-sitter-ruby>=0.23.1",
+]
 
 [project.scripts]
 cpo = "concipio.cli:main"
@@ -11,3 +15,8 @@ cpo = "concipio.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

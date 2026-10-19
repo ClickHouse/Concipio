@@ -1,0 +1,541 @@
+"""Review mode: the commands an agent uses to sweep a change."""
+
+import json
+import re
+import subprocess
+import time
+from dataclasses import asdict
+from pathlib import Path
+
+from . import docs, spans as spans_mod
+from .store import Store
+
+MUTATING = {"statement add", "concept add", "concept edit", "concept merge",
+            "attach", "detach", "unjustified"}
+STALL_WINDOW = 15
+SPAN_ID = re.compile(r"\bS\d+\b")
+
+
+class ReviewError(Exception):
+    pass
+
+
+def rev(repo, ref):
+    out = subprocess.run(["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+                         cwd=repo, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise ReviewError(f"{ref} is not a commit")
+    return out.stdout.strip()
+
+
+def split_range(repo, text):
+    if ".." not in text:
+        raise ReviewError(f"expected <base>..<head>, got {text}")
+    base, head = text.split("..", 1)
+    return rev(repo, base), rev(repo, head or "HEAD")
+
+
+def normalize(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+class Review:
+    """The active review in a project's store, and the project's graph."""
+
+    def __init__(self, repo, review_id=None):
+        self.repo = Path(repo)
+        self.store = Store(repo)
+        self.id = review_id or self.store.current
+        if not self.id:
+            raise ReviewError("no review; run cpo review init <base>..<head>")
+        self.dir = f"reviews/{self.id}"
+        self.manifest = self.store.read(f"{self.dir}/manifest.json", None)
+        if self.manifest is None:
+            raise ReviewError(f"review {self.id} has no manifest")
+        self.spans = {s["id"]: s for s in self.store.read(f"{self.dir}/spans.json", [])}
+        self.state = self.store.read(f"{self.dir}/state.json",
+                                     {"attachments": [], "unjustified": {}, "marks": []})
+        self.graph = self.store.read("graph.json",
+                                     {"statements": {}, "concepts": {}, "next": {}})
+
+    def save(self):
+        self.store.write(f"{self.dir}/state.json", self.state)
+        self.store.write("graph.json", self.graph)
+
+    def mint(self, letter):
+        n = self.graph["next"].get(letter, 1)
+        self.graph["next"][letter] = n + 1
+        return f"{letter}{n}"
+
+    def log(self, command, args):
+        self.store.append(f"{self.dir}/log.jsonl", {
+            "t": time.time(), "command": command, "args": args,
+            "remaining": self.remaining()})
+
+    # Queries over the graph.
+
+    def concept(self, cid):
+        c = self.graph["concepts"].get(cid)
+        if not c or c.get("merged_into"):
+            raise ReviewError(f"{cid} is not a concept")
+        return c
+
+    def span(self, sid):
+        if sid not in self.spans:
+            raise ReviewError(f"{sid} is not a span in review {self.id}")
+        return self.spans[sid]
+
+    def attached(self, sid):
+        return [a for a in self.state["attachments"] if a[0] == sid]
+
+    def chain(self, cid):
+        """Return the ancestors of a concept, nearest first, stopping at a
+        statement or at a parent that does not exist."""
+        seen, out = set(), []
+        node = self.graph["concepts"].get(cid, {}).get("parent")
+        while node and node not in seen:
+            seen.add(node)
+            out.append(node)
+            if node.startswith("D"):
+                break
+            node = self.graph["concepts"].get(node, {}).get("parent")
+        return out
+
+    def used_concepts(self):
+        used = set()
+        for _, cid, _ in self.state["attachments"]:
+            used.add(cid)
+            used.update(c for c in self.chain(cid) if c.startswith("C"))
+        return used
+
+    def evidence(self, cid):
+        """Spans attached to a concept or its descendants."""
+        found = set()
+        for sid, c, _ in self.state["attachments"]:
+            if c == cid or cid in self.chain(c):
+                found.add(sid)
+        return found
+
+    def uncovered(self):
+        return [sid for sid in self.spans
+                if not self.attached(sid) and sid not in self.state["unjustified"]]
+
+    def unexplained(self):
+        out = []
+        for cid in sorted(self.used_concepts(), key=lambda c: int(c[1:])):
+            c = self.graph["concepts"][cid]
+            cited = set(SPAN_ID.findall(c.get("claim", "")))
+            if not c.get("claim", "").strip():
+                out.append((cid, "has no claim"))
+            elif not cited & self.evidence(cid):
+                out.append((cid, "claim cites none of its attached spans"))
+        return out
+
+    def remaining(self):
+        return len(self.uncovered()) + len(self.unexplained())
+
+
+def gh_pr(repo, pr, fields):
+    cmd = ["gh", "pr", "view", pr, "--json", fields]
+    m = re.fullmatch(r"([\w.-]+/[\w.-]+)#(\d+)", pr)
+    if m:
+        cmd = ["gh", "pr", "view", m[2], "--repo", m[1], "--json", fields]
+    out = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise ReviewError(f"could not read pull request {pr}: {out.stderr.strip()}")
+    return json.loads(out.stdout)
+
+
+def pr_range(repo, pr):
+    """Return base..head for a pull request, using the merge base as GitHub
+    does, so commits on the base branch since the fork are not in scope."""
+    data = gh_pr(repo, pr, "baseRefOid,headRefOid")
+    for oid in (data["baseRefOid"], data["headRefOid"]):
+        if subprocess.run(["git", "cat-file", "-e", oid], cwd=repo).returncode != 0:
+            raise ReviewError(f"{oid[:10]} from {pr} is not in this repository; fetch it first")
+    base = subprocess.run(["git", "merge-base", data["baseRefOid"], data["headRefOid"]],
+                          cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    return f"{base}..{data['headRefOid']}"
+
+
+# Implements [CPO§V4]
+def cmd_init(repo, args):
+    base, head = split_range(repo, args.range)
+    store = Store(repo)
+    review_id = f"{base[:10]}..{head[:10]}"
+    design = []
+    for path in args.design_file or []:
+        design.append({"source": str(path), "text": Path(path).read_text()})
+    for pr in args.pr or []:
+        data = gh_pr(repo, pr, "title,body,url")
+        design.append({"source": data["url"],
+                       "text": f"{data['title']}\n\n{data['body']}"})
+    stacked = [dict(zip(("base", "head"), split_range(repo, r)))
+               for r in args.stacked_on or []]
+    # Implements [CPO§V23]
+    _, defs, _ = docs.load(repo)
+    adopted = (Path(repo) / ".cpo").exists() or bool(defs)
+    found = spans_mod.find_spans(repo, base, head, args.limit)
+    manifest = {
+        "id": review_id, "repo": str(repo), "base": base, "head": head,
+        "stacked_on": stacked, "design": design, "adopted": adopted,
+        "span_limit": args.limit, "parsers": parser_versions(),
+        "created": time.time(),
+    }
+    store.write(f"reviews/{review_id}/manifest.json", manifest)
+    store.write(f"reviews/{review_id}/spans.json", [asdict(s) for s in found])
+    store.current = review_id
+    by_file = {}
+    for s in found:
+        by_file[s.path] = by_file.get(s.path, 0) + 1
+    data = {"review": review_id, "store": str(store.dir), "adopted": adopted,
+            "design_sources": [d["source"] for d in design],
+            "spans": len(found), "spans_by_file": by_file}
+    human = [f"Review {review_id}: {len(found)} spans in {len(by_file)} files.",
+             f"Store: {store.dir}",
+             "The repository has adopted Concipio; concepts are checked against its docs."
+             if adopted else
+             "The repository has not adopted Concipio; the review runs from the store.",
+             "Design text: " + (", ".join(data["design_sources"]) or "none")]
+    human += [f"  {n:4}  {p}" for p, n in sorted(by_file.items())]
+    return data, "\n".join(human)
+
+
+def parser_versions():
+    from importlib.metadata import version, PackageNotFoundError
+    out = {}
+    for pkg in ("tree-sitter", "tree-sitter-ruby", "tree-sitter-bash"):
+        try:
+            out[pkg] = version(pkg)
+        except PackageNotFoundError:
+            pass
+    return out
+
+
+# Implements [CPO§V6]
+def cmd_statement_add(r, args):
+    if args.drafted:
+        if not args.text:
+            raise ReviewError("a drafted statement needs --text")
+        statement = {"text": args.text, "provenance": "drafted"}
+    else:
+        if not args.quote:
+            raise ReviewError("a given statement needs --quote, or use --drafted")
+        quote = normalize(args.quote)
+        sources = [d for d in r.manifest["design"] if quote in normalize(d["text"])]
+        if not sources:
+            raise ReviewError("the quote appears in none of the review's design text")
+        statement = {"text": args.text or args.quote, "provenance": "given",
+                     "quote": args.quote, "source": sources[0]["source"]}
+    sid = r.mint("D")
+    statement.update(id=sid, review=r.id)
+    r.graph["statements"][sid] = statement
+    r.log("statement add", statement)
+    r.save()
+    return statement, f"{sid} ({statement['provenance']}): {statement['text']}"
+
+
+def check_parent(r, parent):
+    if parent is None:
+        return
+    if parent.startswith("D") and parent in r.graph["statements"]:
+        return
+    if parent.startswith("C"):
+        r.concept(parent)
+        return
+    raise ReviewError(f"{parent} is neither a statement nor a concept")
+
+
+def cmd_concept_add(r, args):
+    if not args.name.strip():
+        raise ReviewError("a concept needs a name")
+    check_parent(r, args.parent)
+    cid = r.mint("C")
+    c = {"id": cid, "name": args.name, "claim": args.claim or "", "parent": args.parent}
+    r.graph["concepts"][cid] = c
+    r.log("concept add", c)
+    r.save()
+    return c, f"{cid}: {c['name']}"
+
+
+def cmd_concept_edit(r, args):
+    c = r.concept(args.concept)
+    if args.parent is not None:
+        check_parent(r, args.parent)
+        if args.parent == args.concept or args.concept in r.chain(args.parent):
+            raise ReviewError("a concept cannot be its own ancestor")
+    for key in ("name", "claim", "parent"):
+        value = getattr(args, key)
+        if value is not None:
+            c[key] = value
+    r.log("concept edit", c)
+    r.save()
+    return c, f"{c['id']}: {c['name']}"
+
+
+def cmd_concept_merge(r, args):
+    source, target = r.concept(args.source), r.concept(args.into)
+    if source is target:
+        raise ReviewError("a concept cannot merge into itself")
+    for a in r.state["attachments"]:
+        if a[1] == args.source:
+            a[1] = args.into
+    r.state["attachments"] = [list(a) for a in {tuple(a) for a in r.state["attachments"]}]
+    for c in r.graph["concepts"].values():
+        if c.get("parent") == args.source:
+            c["parent"] = args.into
+    source["merged_into"] = args.into
+    r.log("concept merge", {"source": args.source, "into": args.into})
+    r.save()
+    return target, f"{args.source} merged into {args.into}: {target['name']}"
+
+
+# Implements [CPO§V13]
+def cmd_attach(r, args):
+    r.span(args.span)
+    r.concept(args.concept)
+    entry = [args.span, args.concept, args.role]
+    if entry not in r.state["attachments"]:
+        r.state["attachments"].append(entry)
+    r.state["unjustified"].pop(args.span, None)
+    r.log("attach", {"span": args.span, "concept": args.concept, "role": args.role})
+    r.save()
+    return {"attached": entry}, f"{args.span} -> {args.concept} ({args.role})"
+
+
+def cmd_detach(r, args):
+    before = len(r.state["attachments"])
+    r.state["attachments"] = [a for a in r.state["attachments"]
+                              if not (a[0] == args.span and a[1] == args.concept)]
+    if len(r.state["attachments"]) == before:
+        raise ReviewError(f"{args.span} is not attached to {args.concept}")
+    r.log("detach", {"span": args.span, "concept": args.concept})
+    r.save()
+    return {"detached": [args.span, args.concept]}, f"{args.span} -/-> {args.concept}"
+
+
+# Implements [CPO§V14]
+def cmd_unjustified(r, args):
+    r.span(args.span)
+    if not args.reason.strip():
+        raise ReviewError("an unjustified mark needs a reason")
+    if r.attached(args.span):
+        raise ReviewError(f"{args.span} is attached; detach it first")
+    r.state["unjustified"][args.span] = args.reason
+    r.log("unjustified", {"span": args.span, "reason": args.reason})
+    r.save()
+    return {"span": args.span, "reason": args.reason}, f"{args.span} unjustified: {args.reason}"
+
+
+def span_code(r, s):
+    """The span's code with line numbers, marking the lines the change
+    touched with + (or - for deleted code), so an agent classifies the
+    change rather than the whole declaration around it."""
+    rev_ = r.manifest["head"] if s["side"] == "new" else r.manifest["base"]
+    text = spans_mod.file_at(r.repo, rev_, s["path"]) or ""
+    changed = spans_mod.changed_lines(r.repo, r.manifest["base"], r.manifest["head"],
+                                      s["path"], s["side"])
+    mark = "+" if s["side"] == "new" else "-"
+    lines = text.splitlines()[s["start"] - 1:s["end"]]
+    return "\n".join(f"{n:5} {mark if n in changed else ' '} {line}"
+                     for n, line in enumerate(lines, s["start"]))
+
+
+def concept_list(r):
+    """Concepts as one line each; `cpo show` gives the rest."""
+    return [f"{c['id']} {c['name']}"
+            for c in r.graph["concepts"].values() if not c.get("merged_into")]
+
+
+# Implements [CPO§V24]
+def cmd_next(r, args):
+    uncovered = r.uncovered()
+    prefix = getattr(args, "path", None)
+    if prefix:
+        uncovered = [s for s in uncovered if r.spans[s]["path"].startswith(prefix)]
+    if uncovered:
+        s = r.spans[uncovered[0]]
+        span = {k: s[k] for k in ("id", "path", "start", "end", "scope", "kind", "test")}
+        if s["side"] == "old":
+            span["deleted"] = True
+        data = {"work": "span", "span": span, "code": span_code(r, s),
+                "remaining_spans": len(uncovered)}
+        if not getattr(args, "brief", False):
+            data["concepts"] = concept_list(r)
+        side = "deleted from base" if s["side"] == "old" else "head"
+        human = (f"{s['id']}  {s['path']}:{s['start']}-{s['end']} ({side})\n"
+                 f"  {s['scope']}  [{s['kind']}{', test' if s['test'] else ''}]"
+                 f"  {len(uncovered)} spans left\n\n{data['code']}")
+        return data, human
+    unexplained = [] if prefix else r.unexplained()
+    if unexplained:
+        cid, why = unexplained[0]
+        c = r.graph["concepts"][cid]
+        data = {"work": "concept", "concept": c, "problem": why,
+                "evidence": sorted(r.evidence(cid), key=lambda s: int(s[1:]))}
+        return data, f"{cid} {why}: {c['name']}\n  attached spans: {', '.join(data['evidence'])}"
+    return {"work": None}, "Nothing remains. Run cpo check."
+
+
+# Implements [CPO§V17]
+def cmd_check(r, args):
+    uncovered = r.uncovered()
+    unexplained = r.unexplained()
+    used = r.used_concepts()
+    undeclared = sorted((c for c in used if not any(p.startswith("D") for p in r.chain(c))),
+                        key=lambda c: int(c[1:]))
+    reached = {p for c in used for p in r.chain(c) if p.startswith("D")}
+    mine = [s for s in r.graph["statements"].values() if s.get("review") == r.id]
+    unimplemented = [s["id"] for s in mine if s["id"] not in reached]
+    coverage = {}
+    for prov in ("given", "drafted"):
+        ids = [s["id"] for s in mine if s["provenance"] == prov]
+        coverage[prov] = {"statements": len(ids),
+                          "implemented": len([i for i in ids if i in reached])}
+    data = {
+        "traced": not uncovered, "explained": not unexplained,
+        "uncovered_spans": uncovered,
+        "unexplained_concepts": [{"concept": c, "problem": p} for c, p in unexplained],
+        "undeclared_behavior": undeclared,
+        "unimplemented_claims": unimplemented,
+        "unjustified": r.state["unjustified"],
+        "coverage_by_provenance": coverage,
+    }
+    names = {c["id"]: c["name"] for c in r.graph["concepts"].values()}
+    human = [f"Traced:    {'pass' if data['traced'] else 'FAIL'}"
+             f" ({len(r.spans) - len(uncovered)}/{len(r.spans)} spans covered)",
+             f"Explained: {'pass' if data['explained'] else 'FAIL'}"]
+    if uncovered:
+        human.append(f"  Uncovered: {', '.join(uncovered[:20])}"
+                     f"{' ...' if len(uncovered) > 20 else ''}")
+    for c, p in unexplained:
+        human.append(f"  {c} ({names[c]}) {p}")
+    if undeclared:
+        human.append("Undeclared behavior: " +
+                     ", ".join(f"{c} ({names[c]})" for c in undeclared))
+    if unimplemented:
+        human.append("Unimplemented claims: " + ", ".join(unimplemented))
+    if r.state["unjustified"]:
+        human.append(f"Unjustified: {len(r.state['unjustified'])} spans")
+    for prov, v in coverage.items():
+        if v["statements"]:
+            human.append(f"{prov.capitalize()} statements: "
+                         f"{v['implemented']}/{v['statements']} implemented")
+    return data, "\n".join(human)
+
+
+# Implements [CPO§V19]
+def cmd_record(r, args):
+    entry = {"model": args.model, "input_tokens": args.input_tokens,
+             "output_tokens": args.output_tokens, "tokens": args.tokens,
+             "spans": args.spans, "note": args.note}
+    r.store.append(f"{r.dir}/log.jsonl", {"t": time.time(), "command": "record",
+                                          "args": entry, "remaining": r.remaining()})
+    total = args.tokens or args.input_tokens + args.output_tokens
+    return entry, f"recorded {total} tokens for {args.model}"
+
+
+def cost(r):
+    totals = {}
+    for e in r.store.lines(f"{r.dir}/log.jsonl"):
+        if e["command"] != "record":
+            continue
+        a = e["args"]
+        t = totals.setdefault(a["model"], {"tokens": 0, "input_tokens": 0,
+                                           "output_tokens": 0, "spans": 0})
+        t["input_tokens"] += a["input_tokens"]
+        t["output_tokens"] += a["output_tokens"]
+        t["tokens"] += a.get("tokens") or a["input_tokens"] + a["output_tokens"]
+        t["spans"] += a.get("spans") or 0
+    return totals
+
+
+# Implements [CPO§V18]
+def cmd_status(r, args):
+    log = [e for e in r.store.lines(f"{r.dir}/log.jsonl") if e["command"] in MUTATING]
+    now = r.remaining()
+    stall = None
+    if len(log) >= STALL_WINDOW:
+        window = log[-STALL_WINDOW:]
+        before = log[-STALL_WINDOW - 1]["remaining"] if len(log) > STALL_WINDOW else None
+        if before is not None and min(e["remaining"] for e in window) >= before:
+            stall = f"what remains has not shrunk in {STALL_WINDOW} commands"
+    toggles = {}
+    for e in log[-2 * STALL_WINDOW:]:
+        if e["command"] == "detach":
+            key = (e["args"]["span"], e["args"]["concept"])
+            toggles[key] = toggles.get(key, 0) + 1
+    flapping = [f"{s} on {c}" for (s, c), n in toggles.items() if n >= 2]
+    if flapping and not stall:
+        stall = "spans attached and detached repeatedly: " + ", ".join(flapping)
+    last = log[-1]["remaining"] if log else None
+    data = {"review": r.id, "remaining": now,
+            "uncovered_spans": len(r.uncovered()),
+            "unexplained_concepts": len(r.unexplained()),
+            "commands": len(log), "stall": stall, "cost": cost(r)}
+    human = (f"Review {r.id}: {now} remaining "
+             f"({data['uncovered_spans']} spans, {data['unexplained_concepts']} concepts) "
+             f"after {len(log)} commands")
+    for model, t in data["cost"].items():
+        total = t["tokens"]
+        per = f", {total // t['spans']} per span" if t["spans"] else ""
+        human += f"\n  {model}: {total} tokens over {t['spans']} spans{per}"
+    if stall:
+        human += f"\nSTALLED: {stall}. Stop and report what is stuck."
+    return data, human
+
+
+def show_item(r, ident):
+    if ident in r.spans:
+        s = r.spans[ident]
+        att = r.attached(ident)
+        data = dict(s, code=span_code(r, s), attachments=att,
+                    unjustified=r.state["unjustified"].get(ident))
+        human = (f"{ident}  {s['path']}:{s['start']}-{s['end']}  {s['scope']}\n"
+                 + "".join(f"  -> {c} ({r.graph['concepts'][c]['name']}, {role})\n"
+                           for _, c, role in att)
+                 + (f"  unjustified: {data['unjustified']}\n" if data["unjustified"] else "")
+                 + "\n" + data["code"])
+        return data, human
+    if ident in r.graph["concepts"]:
+        c = r.graph["concepts"][ident]
+        kids = [k["id"] for k in r.graph["concepts"].values() if k.get("parent") == ident
+                and not k.get("merged_into")]
+        ev = sorted(r.evidence(ident), key=lambda s: int(s[1:]))
+        data = dict(c, children=kids, spans=ev, ancestors=r.chain(ident))
+        human = (f"{ident}: {c['name']}\n  parent: {c.get('parent')}\n  claim: {c['claim']}\n"
+                 f"  children: {', '.join(kids) or 'none'}\n  spans: {', '.join(ev) or 'none'}")
+        return data, human
+    if ident in r.graph["statements"]:
+        s = r.graph["statements"][ident]
+        return s, f"{ident} ({s['provenance']}): {s['text']}"
+    return None
+
+
+def cmd_reviewable(repo, args):
+    """Pin the change, reusing a review already pinned to the same commits,
+    and report whether it is ready for a human: exit 0 if both verdicts
+    pass, or show the first unmet obligation and exit 1."""
+    target = args.target
+    is_range = ".." in target
+    rng = target if is_range else pr_range(repo, target)
+    base, head = split_range(repo, rng)
+    store = Store(repo)
+    review_id = f"{base[:10]}..{head[:10]}"
+    created = None
+    if store.read(f"reviews/{review_id}/manifest.json", None) is None:
+        init_args = type("A", (), {"range": rng, "pr": [] if is_range else [target],
+                                   "design_file": args.design_file, "limit": args.limit,
+                                   "stacked_on": args.stacked_on})()
+        created, _ = cmd_init(repo, init_args)
+    store.current = review_id
+    r = Review(repo, review_id)
+    verdict, summary = cmd_check(r, args)
+    ready = verdict["traced"] and verdict["explained"]
+    data = {"review": review_id, "reviewable": ready, "check": verdict, "created": bool(created)}
+    human = summary
+    if not ready:
+        nxt, nxt_human = cmd_next(r, type("A", (), {"path": None, "brief": False})())
+        data["next"] = nxt
+        human += "\n\nFirst unmet obligation:\n" + nxt_human
+    return data, human, 0 if ready else 1

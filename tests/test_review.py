@@ -205,3 +205,34 @@ def test_a_new_head_carries_the_review(repo, capsys):
     assert nxt["span"]["id"] in old_ids, "a carried span keeps its ID"
     run(capsys, "attach", c["flagged"][0], "C1")
     assert run(capsys, "reviewable", "HEAD~2..HEAD")[0] == 0
+
+
+def test_statement_structure_and_kinds(repo, capsys):
+    (repo / "pr.md").write_text(
+        "Grow volumes. Users ran out of disk. Shrinking comes later. Online growth.\n")
+    run(capsys, "review", "init", "HEAD~1..HEAD", "--design-file", "pr.md")
+    run(capsys, "statement", "add", "--quote", "Grow volumes.")
+    run(capsys, "statement", "add", "--quote", "Users ran out of disk.", "--parent", "D1",
+        "--kind", "context")
+    run(capsys, "statement", "add", "--quote", "Shrinking comes later.", "--parent", "D1",
+        "--kind", "planned")
+    run(capsys, "statement", "add", "--quote", "Online growth.")
+    run(capsys, "statement", "edit", "D4", "--parent", "D1")
+    assert run(capsys, "statement", "edit", "D1", "--parent", "D4")[0] == 1, "no cycles"
+    run(capsys, "concept", "add", "--name", "Growth", "--parent", "D4", "--claim", "S1")
+    ids = [s.id for s in spans.find_spans(repo, "HEAD~1", "HEAD")]
+    run(capsys, "attach", ids[0], "C1")
+    assert run(capsys, "unjustified", ids[1], "--reason", "x", "--see", "D4")[0] == 1, \
+        "a claim is implemented, not cited for context"
+    run(capsys, "unjustified", ids[1], "--reason", "for later", "--see", "D3")
+    for i in ids[2:]:
+        run(capsys, "attach", i, "C1")
+    _, d = run(capsys, "check")
+    assert d["unimplemented_claims"] == [], "D1 is reached through D4; D2 and D3 need no code"
+    assert d["coverage_by_provenance"]["given"] == {"claims": 2, "other": 2, "implemented": 2}
+    assert d["explained_by_context"] == {ids[1]: ["D3"]}
+    _, r = run(capsys, "render")
+    text = open(r["path"]).read()
+    cornerstone = text.split("## Cornerstone")[1].split("\n## ")[0]
+    assert cornerstone.index("[D2]") < cornerstone.index("[D3]") < cornerstone.index("[D4]")
+    assert "Explains unjustified code" in text

@@ -18,8 +18,11 @@ changes this one builds on. Exit 0 means it is already reviewable; stop.
 
 ## 2. Settle the top of the map yourself
 
-- Read the design text in the manifest (`cpo show` and the review's
-  `design` field) and add each claim with `cpo statement add --quote`.
+- Read the design text in the manifest and add all of it with
+  `cpo statement add --quote`, keeping its structure with `--parent` and
+  typing each passage with `--kind` (claim, context, planned, descriptive).
+  The top statement is the review's cornerstone; if the change belongs to
+  a larger design the repository has, make that the parent.
 - List the spans by scope (the `spans_by_file` output and `cpo next`), not
   by reading every line, and draft the concepts a reviewer would need:
   one per statement, plus the medium-level mechanisms beneath them. Each

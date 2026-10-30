@@ -68,6 +68,13 @@ runs the same on a repository that will never adopt Concipio.
   rejects a quote that does not appear in a snapshot. Such statements are
   *given* [M38]. A statement the agent writes from the code instead is
   *drafted*, and carries no quote.
+  - **CPO§V31:** Harvesting keeps all of the design text and its structure.
+    Each statement may name a parent statement, so a summary, its numbered
+    points, and the claims under each point keep their shape. Each has a
+    kind: a *claim*, which code must implement; *context*, such as the
+    problem being solved; *planned* work; or a *descriptive* fact, such as a
+    measurement. Only claims need code, and a parent counts as implemented
+    when a statement refining it is.
 - **CPO§V7:** Each statement gets a short local ID, `D1`, `D2`, and so on,
   unique within the project's store.
 
@@ -122,7 +129,8 @@ runs the same on a repository that will never adopt Concipio.
   so the walkthrough can show, for each claim, the tests that assert it.
 - **CPO§V14:** `cpo unjustified` marks a span with a reason. Concipio
   requires the reason to be non-empty and never turns an unjustified mark into
-  anything else [T15].
+  anything else [T15]. With `--see`, the mark also names a context or
+  planned statement that accounts for the span [M45].
 
 ## Commands
 
@@ -162,6 +170,12 @@ runs the same on a repository that will never adopt Concipio.
   that can run a command and read an exit code can drive a change to
   reviewable: a skill, CI, or an editor.
 
+- **CPO§V30:** A rendered review opens with a cornerstone: the outline of
+  its statements, one line each, linked to their sections. It is the root
+  of the review's design, and in a pull request it mirrors the description.
+  The driving agent chooses the root. Where the change belongs to a larger
+  design, the root's parent is a statement in that design, and the
+  cornerstone becomes a link to it.
 - **CPO§V29:** `cpo render` writes the review's statements and concepts to
   the store as a Markdown design doc, one section per statement, with each
   concept's spans beneath it, and checks that it fits on a screen [M41].
@@ -240,6 +254,13 @@ runs the same on a repository that will never adopt Concipio.
   judgment and belongs to the skill.
 
 ## Open questions
+
+- Should the agents that classify spans see the design text, or classify
+  blind and leave it to `cpo check` to find what the author already
+  explained [M45]? Today they see only concepts, which were drawn from the
+  design text.
+- A shared test fixture serves the tests of several concepts. Should it
+  attach to all of them, or to their nearest common parent?
 
 - What should the default span limit be [V8]? Too small, and one method
   splits into many spans; too large, and one concept covers a screenful of

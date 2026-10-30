@@ -10,7 +10,7 @@ from pathlib import Path
 from . import docs, spans as spans_mod
 from .store import Store
 
-MUTATING = {"statement add", "concept add", "concept edit", "concept merge",
+MUTATING = {"statement add", "statement edit", "concept add", "concept edit", "concept merge",
             "attach", "detach", "unjustified"}
 STALL_WINDOW = 15
 SPAN_ID = re.compile(r"\bS\d+\b")
@@ -243,12 +243,46 @@ def cmd_statement_add(r, args):
             raise ReviewError("the quote appears in none of the review's design text")
         statement = {"text": args.text or args.quote, "provenance": "given",
                      "quote": args.quote, "source": sources[0]["source"]}
+    check_statement_parent(r, args.parent)
+    statement["kind"] = args.kind
+    statement["parent"] = args.parent
     sid = r.mint("D")
     statement.update(id=sid, review=r.id, reviews=[r.id])
     r.graph["statements"][sid] = statement
     r.log("statement add", statement)
     r.save()
-    return statement, f"{sid} ({statement['provenance']}): {statement['text']}"
+    return statement, f"{sid} ({statement['provenance']} {args.kind}): {statement['text']}"
+
+
+KINDS = ("claim", "context", "planned", "descriptive")
+
+
+def check_statement_parent(r, parent, child=None):
+    if parent is None:
+        return
+    if parent not in r.graph["statements"]:
+        raise ReviewError(f"{parent} is not a statement")
+    node = parent
+    while node:
+        if node == child:
+            raise ReviewError("a statement cannot be its own ancestor")
+        node = r.graph["statements"][node].get("parent")
+
+
+# Implements [CPO§V6]
+def cmd_statement_edit(r, args):
+    st = r.graph["statements"].get(args.statement)
+    if not st:
+        raise ReviewError(f"{args.statement} is not a statement")
+    if args.parent is not None:
+        parent = args.parent or None
+        check_statement_parent(r, parent, args.statement)
+        st["parent"] = parent
+    if args.kind is not None:
+        st["kind"] = args.kind
+    r.log("statement edit", st)
+    r.save()
+    return st, f"{st['id']} ({st.get('kind', 'claim')}): {st['text']}"
 
 
 def check_parent(r, parent):
@@ -341,8 +375,19 @@ def cmd_unjustified(r, args):
     for a in r.attached(args.span):
         r.state["attachments"].remove(a)
     r.state["unjustified"][args.span] = args.reason
+    see = [d for d in (getattr(args, "see", None) or [])]
+    for d in see:
+        if d not in r.graph["statements"]:
+            raise ReviewError(f"{d} is not a statement")
+        if r.graph["statements"][d].get("kind", "claim") == "claim":
+            raise ReviewError(f"{d} is a claim; attach the span to a concept under it instead")
+    explained = r.state.setdefault("explained_by", {})
+    if see:
+        explained[args.span] = see
+    else:
+        explained.pop(args.span, None)
     r.confirm(args.span)
-    r.log("unjustified", {"span": args.span, "reason": args.reason})
+    r.log("unjustified", {"span": args.span, "reason": args.reason, "see": see})
     r.save()
     return {"span": args.span, "reason": args.reason}, f"{args.span} unjustified: {args.reason}"
 
@@ -410,13 +455,25 @@ def cmd_check(r, args):
     undeclared = sorted((c for c in used if not any(p.startswith("D") for p in r.chain(c))),
                         key=lambda c: int(c[1:]))
     reached = {p for c in used for p in r.chain(c) if p.startswith("D")}
+    # A statement is implemented when it, or a statement refining it, is.
+    for d in list(reached):
+        node = r.graph["statements"].get(d, {}).get("parent")
+        while node and node not in reached:
+            reached.add(node)
+            node = r.graph["statements"].get(node, {}).get("parent")
     mine = r.statements()
-    unimplemented = [s["id"] for s in mine if s["id"] not in reached]
+    unimplemented = [s["id"] for s in mine
+                     if s.get("kind", "claim") == "claim" and s["id"] not in reached]
+    explained_by = {s: d for s, d in r.state.get("explained_by", {}).items()
+                    if s in r.state["unjustified"]}
     coverage = {}
     for prov in ("given", "drafted"):
-        ids = [s["id"] for s in mine if s["provenance"] == prov]
-        coverage[prov] = {"statements": len(ids),
-                          "implemented": len([i for i in ids if i in reached])}
+        claims = [s["id"] for s in mine
+                  if s["provenance"] == prov and s.get("kind", "claim") == "claim"]
+        others = [s["id"] for s in mine
+                  if s["provenance"] == prov and s.get("kind", "claim") != "claim"]
+        coverage[prov] = {"claims": len(claims), "other": len(others),
+                          "implemented": len([i for i in claims if i in reached])}
     strict = getattr(args, "strict", False)
     data = {
         "traced": not uncovered and not (strict and undeclared),
@@ -426,6 +483,7 @@ def cmd_check(r, args):
         "undeclared_behavior": undeclared,
         "unimplemented_claims": unimplemented,
         "unjustified": r.state["unjustified"],
+        "explained_by_context": explained_by,
         "coverage_by_provenance": coverage,
     }
     names = {c["id"]: c["name"] for c in r.graph["concepts"].values()}
@@ -443,11 +501,14 @@ def cmd_check(r, args):
     if unimplemented:
         human.append("Unimplemented claims: " + ", ".join(unimplemented))
     if r.state["unjustified"]:
-        human.append(f"Unjustified: {len(r.state['unjustified'])} spans")
+        human.append(f"Unjustified: {len(r.state['unjustified'])} spans"
+                     + (f", {len(explained_by)} explained by context or planned work"
+                        if explained_by else ""))
     for prov, v in coverage.items():
-        if v["statements"]:
-            human.append(f"{prov.capitalize()} statements: "
-                         f"{v['implemented']}/{v['statements']} implemented")
+        if v["claims"] or v["other"]:
+            human.append(f"{prov.capitalize()} claims: {v['implemented']}/{v['claims']} implemented"
+                         + (f"; {v['other']} context, planned, or descriptive"
+                            if v["other"] else ""))
     return data, "\n".join(human)
 
 
@@ -734,15 +795,72 @@ def cmd_render(r, args):
             out += concept_lines(k, depth + 1)
         return out
 
+    mine = r.statements()
+    ids = {st["id"] for st in mine}
+    st_kids = {}
+    for st in mine:
+        parent = st.get("parent") if st.get("parent") in ids else None
+        st_kids.setdefault(parent, []).append(st["id"])
+    by_num = lambda x: int(x[1:])
+    statements = {st["id"]: st for st in mine}
+    explained = {}
+    for sid, ds in r.state.get("explained_by", {}).items():
+        if sid in r.state["unjustified"]:
+            for d in ds:
+                explained.setdefault(d, []).append(sid)
+
+    def short(text):
+        sentence = re.split(r"(?<=[^\d\s][.!?])\s", text, maxsplit=1)[0].rstrip(".")
+        return sentence if len(sentence) <= 70 else sentence[:67].rstrip() + "..."
+
+    def slug(heading):
+        # The anchor GitHub, VS Code, and most viewers give a heading.
+        text = re.sub(r"[^\w\- ]", "", heading.lower())
+        return text.replace(" ", "-")
+
+    # Statements follow the design text's own order; drafted ones follow it.
+    snapshot = " ".join(normalize(d["text"]) for d in r.manifest["design"])
+
+    def in_source_order(sid):
+        quote = statements[sid].get("quote")
+        at = snapshot.find(normalize(quote)) if quote else -1
+        return (at if at >= 0 else len(snapshot), by_num(sid))
+
+    order = []
+
+    def walk_statements(sid, depth):
+        order.append((sid, depth))
+        for k in sorted(st_kids.get(sid, []), key=in_source_order):
+            walk_statements(k, depth + 1)
+
+    for root in sorted(st_kids.get(None, []), key=in_source_order):
+        walk_statements(root, 0)
+
+    # Implements [CPO§V30]
     doc = [f"# {title}", "",
            f"Generated by Concipio from review {r.id}. Statements quote the "
-           "design text; concepts and claims are the agents'.", ""]
-    mine = r.statements()
-    for st in sorted(mine, key=lambda s: int(s["id"][1:])):
-        doc += [f"## {st['id']}", "",
-                wrap(f"**{prefix}§{st['id']}:** {st['text']} *({st['provenance']})*", ""), ""]
-        for cid in sorted(kids.get(st["id"], []), key=lambda x: int(x[1:])):
+           "design text; concepts and claims are the agents'.", "",
+           "## Cornerstone", ""]
+    heading_of = {}
+    for sid, depth in order:
+        heading_of[sid] = f"{sid}: {short(statements[sid]['text'])}"
+        kind = statements[sid].get("kind", "claim")
+        note = "" if kind == "claim" else f" *({kind})*"
+        doc.append(f"{'  ' * depth}- [{sid}] {short(statements[sid]['text'])}{note}")
+        link_defs[sid] = "#" + slug(heading_of[sid])
+    doc.append("")
+    for sid, depth in order:
+        st = statements[sid]
+        kind = st.get("kind", "claim")
+        doc += [f"{'#' * min(2 + depth, 6)} {heading_of[sid]}", "",
+                wrap(f"**{prefix}§{sid}:** {st['text']} *({st['provenance']}"
+                     f"{'' if kind == 'claim' else ', ' + kind})*", ""), ""]
+        for cid in sorted(kids.get(sid, []), key=by_num):
             doc += concept_lines(cid, 0)
+        if explained.get(sid):
+            doc.append(wrap("- Explains unjustified code: " + ", ".join(
+                f"{x} `{r.spans[x]['path']}` ({r.state['unjustified'][x]})"
+                for x in sorted(explained[sid], key=by_num)), ""))
         doc.append("")
     orphans = [c for c in kids.get(None, []) if c in concepts]
     if orphans:
@@ -750,15 +868,17 @@ def cmd_render(r, args):
         for cid in orphans:
             doc += concept_lines(cid, 0)
         doc.append("")
-    if r.state["unjustified"]:
+    loose = {k: v for k, v in r.state["unjustified"].items()
+             if k not in r.state.get("explained_by", {})}
+    if loose:
         doc += ["## Unjustified", ""]
-        for sid, why in r.state["unjustified"].items():
+        for sid, why in loose.items():
             sp = r.spans[sid]
-            doc.append(wrap(f"- {sid} `{sp['path']}` {sp['start']}-{sp['end']}: {why}", ""))
+            doc.append(wrap(f"- {sid} `{sp['path']}`: {why}", ""))
         doc.append("")
     if link_defs:
         doc += [f"[{sid}]: {target}" for sid, target in
-                sorted(link_defs.items(), key=lambda kv: int(kv[0][1:]))]
+                sorted(link_defs.items(), key=lambda kv: (kv[0][0], int(kv[0][1:])))]
         doc.append("")
     out = r.store.dir / "gendoc" / f"{r.id}.md"
     out.parent.mkdir(parents=True, exist_ok=True)

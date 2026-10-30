@@ -96,6 +96,7 @@ def cmd_tree(args, defs):
 
 REVIEW_COMMANDS = {
     ("statement", "add"): review.cmd_statement_add,
+    ("statement", "edit"): review.cmd_statement_edit,
     ("concept", "add"): review.cmd_concept_add,
     ("concept", "edit"): review.cmd_concept_edit,
     ("concept", "merge"): review.cmd_concept_merge,
@@ -154,6 +155,13 @@ def build_parser():
     sa.add_argument("--quote", help="exact text from the design text (a given statement)")
     sa.add_argument("--text", help="the statement, if it differs from the quote")
     sa.add_argument("--drafted", action="store_true", help="a statement written from the code")
+    sa.add_argument("--parent", help="the statement this one refines, keeping the source's structure")
+    sa.add_argument("--kind", choices=review.KINDS, default="claim",
+                    help="claim (must be implemented), context, planned, or descriptive")
+    se = add("edit", "change a statement's parent or kind", st)
+    se.add_argument("statement")
+    se.add_argument("--parent", help="the statement it refines; an empty string clears it")
+    se.add_argument("--kind", choices=review.KINDS)
 
     co = sub.add_parser("concept", help="concepts").add_subparsers(dest="sub", required=True)
     ca = add("add", "add a concept", co)
@@ -179,6 +187,8 @@ def build_parser():
     un = add("unjustified", "mark a span unjustified")
     un.add_argument("span")
     un.add_argument("--reason", required=True)
+    un.add_argument("--see", action="append", metavar="D#",
+                    help="a context or planned statement that explains the span")
     nx = add("next", "give the next piece of work")
     nx.add_argument("--path", help="only spans in paths that start with this")
     nx.add_argument("--brief", action="store_true",

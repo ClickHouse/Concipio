@@ -110,6 +110,11 @@ between the lowest design doc and the code.
       odds-and-ends report. Some of it is benign; dates have to be formatted
       somewhere. Some of it is a smell: why didn't the existing formatter
       handle this, and which design statement asked for it?
+      - **CPO§M45:** Unjustified code may still be explained. When design
+        text that makes no claim, such as the problem being solved or work
+        planned for later, accounts for a span, the span says so, and
+        reports list it apart from code nobody explains. A reviewer then
+        need not ask about what the author already said.
 - **CPO§M4:** Every concept should trace to at least one design statement. A
   concept without one is reported as *undeclared behavior*: the change does
   something its design text does not mention. That may be a bug, a feature
@@ -123,9 +128,10 @@ between the lowest design doc and the code.
     agent from the code. Coverage is reported against each separately. A
     drafted statement never hides undeclared behavior [R8].
 - **CPO§M5:** The reverse is also true: Every design statement should trace to
-  at least one concept, or be marked planned or descriptive. A statement with
-  no concept is reported as an *unimplemented claim*: a missed requirement,
-  or a description that overpromises.
+  at least one concept, unless it is context, planned work, or a description
+  rather than a claim. A claim with no concept is reported as an
+  *unimplemented claim*: a missed requirement, or a description that
+  overpromises.
 
 ### The tool
 

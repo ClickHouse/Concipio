@@ -209,6 +209,16 @@ between the lowest design doc and the code.
       *suspect*, or *unclear*. Suspect starts a closer look. Unclear stays on
       the ledger until it is resolved.
 
+- **CPO§M43:** Readers navigate with tools they already use. `cpo lsp`
+  gives any editor that speaks the Language Server Protocol go to
+  definition, find references, hover, and an outline for tags in docs and
+  code, and, in a rendered review, jumps from a span to its code.
+  - **CPO§M44:** Concipio never writes HTML into docs, because the raw text
+    is what people read and maintain. Plain Markdown can only link to
+    headings, so links in rendered docs go to headings and files, written as
+    reference links that stay out of the way, and the language server
+    handles everything finer.
+
 ### Assumptions
 
 - **CPO§M16:** An assumption is something code at one site relies on that is

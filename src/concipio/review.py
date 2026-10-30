@@ -704,14 +704,31 @@ def cmd_render(r, args):
         direct.setdefault(cid, set()).add(sid)
 
     def wrap(text, indent):
-        return textwrap.fill(text, 78, initial_indent=indent,
-                             subsequent_indent=indent + "  ")
+        # List items hang their continuation lines; paragraphs do not.
+        hang = indent + "  " if text.lstrip().startswith("- ") else indent
+        return textwrap.fill(text, 78, initial_indent=indent, subsequent_indent=hang,
+                             break_long_words=False, break_on_hyphens=False)
+
+    link_defs = {}
+
+    repo = Path(r.manifest["repo"])
+
+    def span_links(ids):
+        by = {}
+        for sid in sorted(ids, key=lambda s: int(s[1:])):
+            sp = r.spans[sid]
+            if sp["side"] == "new":
+                link_defs[sid] = f"<{(repo / sp['path']).as_posix()}#L{sp['start']}>"
+                by.setdefault(sp["path"], []).append(f"[{sid}] {sp['start']}-{sp['end']}")
+            else:
+                by.setdefault(sp["path"], []).append(f"{sid} (deleted) {sp['start']}-{sp['end']}")
+        return [f"`{p}` {', '.join(v)}" for p, v in by.items()]
 
     def concept_lines(cid, depth):
         c = concepts[cid]
         pad = "  " * depth
         out = [wrap(f"- **{prefix}§{cid}:** **{c['name']}.** {c['claim']}", pad)]
-        for line in spans_summary(r, direct.get(cid, ())):
+        for line in span_links(direct.get(cid, ())):
             out.append(wrap(f"- Spans: {line}", pad + "  "))
         for k in sorted(kids.get(cid, []), key=lambda x: int(x[1:])):
             out += concept_lines(k, depth + 1)
@@ -738,6 +755,10 @@ def cmd_render(r, args):
         for sid, why in r.state["unjustified"].items():
             sp = r.spans[sid]
             doc.append(wrap(f"- {sid} `{sp['path']}` {sp['start']}-{sp['end']}: {why}", ""))
+        doc.append("")
+    if link_defs:
+        doc += [f"[{sid}]: {target}" for sid, target in
+                sorted(link_defs.items(), key=lambda kv: int(kv[0][1:]))]
         doc.append("")
     out = r.store.dir / "gendoc" / f"{r.id}.md"
     out.parent.mkdir(parents=True, exist_ok=True)

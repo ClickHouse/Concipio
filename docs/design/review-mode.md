@@ -146,6 +146,7 @@ runs the same on a repository that will never adopt Concipio.
 | `cpo reviewable <PR or range>` | Exit 0 if the change is ready for human review, or show the first unmet obligation [V28] |
 | `cpo show <tag>...` | Show a statement, concept, or span: its name, text, location, and everything that cites or attaches to it [T37] |
 | `cpo mark` | Record what the reviewer saw or concluded [V16] |
+| `cpo lsp` | Serve editors over the Language Server Protocol [M43] |
 | `cpo help agent` | Print the agent protocol [V25] |
 
 - **CPO§V24:** Concipio holds the review's state so the agent does not have
@@ -164,6 +165,9 @@ runs the same on a repository that will never adopt Concipio.
 - **CPO§V29:** `cpo render` writes the review's statements and concepts to
   the store as a Markdown design doc, one section per statement, with each
   concept's spans beneath it, and checks that it fits on a screen [M41].
+  Each statement is a heading, so any viewer can link to it, and each span
+  links to its file and line through reference links at the end of the
+  doc, which the size rule ignores [M44].
   It is the design a review produces, in the form a repository could adopt.
 
 ## The reviewer's ledger

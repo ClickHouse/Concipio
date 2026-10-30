@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PREFIX = r"[^\s\[\]§*`]+"
+PREFIX = r"[^\s\[\]§*`()'\",;:]+"
 ID = r"[A-Z]*\d+(?:\.[a-z0-9]+)?"
 TAG = re.compile(rf"({PREFIX})§({ID})")
 
@@ -38,6 +38,8 @@ class Citation:
     line: int
     role: str
     text: str
+    col: int = 0
+    end: int = 0
 
 
 def repo_root(start="."):
@@ -183,19 +185,21 @@ def find_citations(root, files, defs):
                 if tag in defs:
                     role = role_before(line, m.start() - 1)
                     defs[tag].citations.append(
-                        Citation(path, n, role, line.strip()))
+                        Citation(path, n, role, line.strip(), m.start(), m.end()))
             if is_doc and short_prefix:
                 for m in SHORT_LIST.finditer(line):
-                    for ident in re.split(r",\s*", m.group(1)):
-                        tag = f"{short_prefix}§{ident}"
+                    for im in re.finditer(ID, m.group(1)):
+                        tag = f"{short_prefix}§{im.group(0)}"
                         if tag in defs:
-                            defs[tag].citations.append(
-                                Citation(path, n, "reference", line.strip()))
+                            col = m.start(1) + im.start()
+                            defs[tag].citations.append(Citation(
+                                path, n, "reference", line.strip(), col,
+                                col + len(im.group(0))))
 
 
-def load(start="."):
-    root = repo_root(start)
-    files = tracked_files(root)
+def load(start=".", root=None, files=None):
+    root = root or repo_root(start)
+    files = files if files is not None else tracked_files(root)
     defs, errors = find_definitions(root, files)
     find_citations(root, files, defs)
     return root, defs, errors

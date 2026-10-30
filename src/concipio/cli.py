@@ -204,6 +204,7 @@ def build_parser():
     rd.add_argument("--statement-limit", type=int, default=lint_mod.STATEMENT_LIMIT)
     rd.add_argument("--section-limit", type=int, default=lint_mod.SECTION_LIMIT)
     add("status", "report progress and stalls")
+    sub.add_parser("lsp", help="run a language server on stdio for editors")
     hp = sub.add_parser("help", help="print guidance").add_subparsers(dest="sub", required=True)
     hp.add_parser("agent", help="print the protocol for an agent running a review")
     return parser
@@ -222,6 +223,10 @@ def main(argv=None):
 
 
 def dispatch(args):
+    if args.command == "lsp":
+        from . import lsp
+        lsp.main()
+        return 0
     if args.command == "help":
         print(resources.files("concipio").joinpath("prompts/agent.md").read_text())
         return 0

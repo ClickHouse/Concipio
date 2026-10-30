@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from . import docs
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+LINK_DEF = re.compile(r"^\s{0,3}\[[^\]]+\]:\s")
 STATEMENT_LIMIT = 20
 SECTION_LIMIT = 60
 
@@ -30,7 +31,8 @@ def sections(text):
     starts = [(-1, 0, "(top)")] + marks
     for k, (i, level, title) in enumerate(starts):
         end = starts[k + 1][0] if k + 1 < len(starts) else len(raw)
-        body = raw[i + 1:end]
+        # Link reference definitions never render, so they take no room.
+        body = [l for l in raw[i + 1:end] if not LINK_DEF.match(l)]
         while body and not body[-1].strip():
             body.pop()
         while body and not body[0].strip():

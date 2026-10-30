@@ -160,3 +160,48 @@ def test_next_marks_the_lines_the_change_touched(repo, capsys):
     assert d["span"]["scope"] == "Grower#keep"
     assert [l.split()[1] for l in lines if "+" in l.split()[:2]] == ["+"]
     assert any(l.split()[0] == "3" and l.split()[1] == "+" for l in lines), "the 1 -> 10 line"
+
+
+def test_strict_check_fails_on_undeclared_behavior(repo, capsys):
+    run(capsys, "review", "init", "HEAD~1..HEAD")
+    run(capsys, "concept", "add", "--name", "No statement", "--claim", "S1")
+    for s in spans.find_spans(repo, "HEAD~1", "HEAD"):
+        run(capsys, "attach", s.id, "C1")
+    assert run(capsys, "check")[0] == 0
+    status, d = run(capsys, "check", "--strict")
+    assert status == 1 and d["undeclared_behavior"] == ["C1"]
+
+
+def test_render_writes_a_design_the_lint_can_measure(repo, capsys):
+    run(capsys, "review", "init", "HEAD~1..HEAD", "--design-file", "design.md")
+    run(capsys, "statement", "add", "--quote", "Volumes grow online.")
+    run(capsys, "concept", "add", "--name", "Growth", "--parent", "D1", "--claim", "S1")
+    run(capsys, "attach", "S1", "C1")
+    _, d = run(capsys, "render", "--section-limit", "3")
+    text = open(d["path"]).read()
+    assert "**REVIEW§D1:**" in text and "**REVIEW§C1:**" in text
+    assert [p["rule"] for p in d["problems"]] == ["section-length"]
+
+
+def test_a_new_head_carries_the_review(repo, capsys):
+    (repo / "pr.md").write_text("Volumes grow online.\n")
+    run(capsys, "reviewable", "HEAD~1..HEAD", "--design-file", "pr.md")
+    run(capsys, "statement", "add", "--quote", "Volumes grow online.")
+    run(capsys, "concept", "add", "--name", "Growth", "--parent", "D1", "--claim", "S1")
+    for s in spans.find_spans(repo, "HEAD~1", "HEAD"):
+        run(capsys, "attach", s.id, "C1")
+    # A new head that changes one method and leaves the rest alone.
+    text = (repo / "app.rb").read_text().replace("nap 5", "nap 6")
+    (repo / "app.rb").write_text(text)
+    git(repo, "commit", "-q", "-am", "amend")
+    status, d = run(capsys, "reviewable", "HEAD~2..HEAD", "--design-file", "pr.md")
+    c = d["carried"]
+    assert c["changed"] == 1 and c["new"] == 0 and len(c["flagged"]) == 1
+    assert status == 1 and d["check"]["uncovered_spans"] == c["flagged"]
+    _, nxt = run(capsys, "next")
+    assert nxt["span"]["carried"] == ["C1 (implementation)"]
+    assert sorted(c["flagged"]) == [nxt["span"]["id"]]
+    old_ids = {s.id for s in spans.find_spans(repo, "HEAD~2", "HEAD~1")}
+    assert nxt["span"]["id"] in old_ids, "a carried span keeps its ID"
+    run(capsys, "attach", c["flagged"][0], "C1")
+    assert run(capsys, "reviewable", "HEAD~2..HEAD")[0] == 0

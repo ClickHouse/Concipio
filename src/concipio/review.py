@@ -74,6 +74,12 @@ class Review:
 
     # Queries over the graph.
 
+    def statements(self):
+        """Statements that belong to this review, including those carried
+        over from an earlier review of the same change."""
+        return [s for s in self.graph["statements"].values()
+                if self.id in s.get("reviews", [s.get("review")])]
+
     def concept(self, cid):
         c = self.graph["concepts"].get(cid)
         if not c or c.get("merged_into"):
@@ -117,8 +123,18 @@ class Review:
         return found
 
     def uncovered(self):
+        """Spans with neither an attachment nor an unjustified mark, and
+        carried spans whose code changed and that nobody has looked at
+        since."""
+        flagged = set(self.state.get("changed_since_carried", []))
         return [sid for sid in self.spans
-                if not self.attached(sid) and sid not in self.state["unjustified"]]
+                if sid in flagged
+                or (not self.attached(sid) and sid not in self.state["unjustified"])]
+
+    def confirm(self, sid):
+        flagged = self.state.get("changed_since_carried", [])
+        if sid in flagged:
+            flagged.remove(sid)
 
     def unexplained(self):
         out = []
@@ -228,7 +244,7 @@ def cmd_statement_add(r, args):
         statement = {"text": args.text or args.quote, "provenance": "given",
                      "quote": args.quote, "source": sources[0]["source"]}
     sid = r.mint("D")
-    statement.update(id=sid, review=r.id)
+    statement.update(id=sid, review=r.id, reviews=[r.id])
     r.graph["statements"][sid] = statement
     r.log("statement add", statement)
     r.save()
@@ -297,6 +313,7 @@ def cmd_attach(r, args):
     entry = [args.span, args.concept, args.role]
     if entry not in r.state["attachments"]:
         r.state["attachments"].append(entry)
+    r.confirm(args.span)
     r.state["unjustified"].pop(args.span, None)
     r.log("attach", {"span": args.span, "concept": args.concept, "role": args.role})
     r.save()
@@ -319,9 +336,12 @@ def cmd_unjustified(r, args):
     r.span(args.span)
     if not args.reason.strip():
         raise ReviewError("an unjustified mark needs a reason")
-    if r.attached(args.span):
+    if r.attached(args.span) and args.span not in r.state.get("changed_since_carried", []):
         raise ReviewError(f"{args.span} is attached; detach it first")
+    for a in r.attached(args.span):
+        r.state["attachments"].remove(a)
     r.state["unjustified"][args.span] = args.reason
+    r.confirm(args.span)
     r.log("unjustified", {"span": args.span, "reason": args.reason})
     r.save()
     return {"span": args.span, "reason": args.reason}, f"{args.span} unjustified: {args.reason}"
@@ -358,6 +378,11 @@ def cmd_next(r, args):
         span = {k: s[k] for k in ("id", "path", "start", "end", "scope", "kind", "test")}
         if s["side"] == "old":
             span["deleted"] = True
+        if s["id"] in r.state.get("changed_since_carried", []):
+            span["carried"] = [f"{c} ({role})" for _, c, role in r.attached(s["id"])] or \
+                [f"unjustified: {r.state['unjustified'].get(s['id'])}"]
+            span["note"] = ("carried from an earlier head, and its code has changed; "
+                            "attach it again to confirm, or detach and reclassify")
         data = {"work": "span", "span": span, "code": span_code(r, s),
                 "remaining_spans": len(uncovered)}
         if not getattr(args, "brief", False):
@@ -385,15 +410,17 @@ def cmd_check(r, args):
     undeclared = sorted((c for c in used if not any(p.startswith("D") for p in r.chain(c))),
                         key=lambda c: int(c[1:]))
     reached = {p for c in used for p in r.chain(c) if p.startswith("D")}
-    mine = [s for s in r.graph["statements"].values() if s.get("review") == r.id]
+    mine = r.statements()
     unimplemented = [s["id"] for s in mine if s["id"] not in reached]
     coverage = {}
     for prov in ("given", "drafted"):
         ids = [s["id"] for s in mine if s["provenance"] == prov]
         coverage[prov] = {"statements": len(ids),
                           "implemented": len([i for i in ids if i in reached])}
+    strict = getattr(args, "strict", False)
     data = {
-        "traced": not uncovered, "explained": not unexplained,
+        "traced": not uncovered and not (strict and undeclared),
+        "explained": not unexplained, "strict": strict,
         "uncovered_spans": uncovered,
         "unexplained_concepts": [{"concept": c, "problem": p} for c, p in unexplained],
         "undeclared_behavior": undeclared,
@@ -512,6 +539,101 @@ def show_item(r, ident):
     return None
 
 
+def span_key(s):
+    return (s["path"], s["side"], s["scope"], s["quote"])
+
+
+# Implements [CPO§V11]
+def carry(store, old_id, new_id):
+    """Carry an earlier review's statements, attachments, and marks to a
+    review of a new head. A span carries when its path, scope, and quote
+    match one in the old review; if its code changed, the carried
+    attachment is flagged for a fresh look."""
+    old = Review(store.repo, old_id)
+    new = Review(store.repo, new_id)
+    by_key = {span_key(s): s for s in old.spans.values()}
+    by_scope = {}
+    for s in old.spans.values():
+        by_scope.setdefault((s["path"], s["side"], s["scope"]), []).append(s)
+    old_code = {}
+
+    def code(rv, s):
+        rev_ = rv.manifest["head"] if s["side"] == "new" else rv.manifest["base"]
+        text = spans_mod.file_at(rv.repo, rev_, s["path"]) or ""
+        return "\n".join(text.splitlines()[s["start"] - 1:s["end"]])
+
+    # A span that matches one in the old review keeps its ID, so claims
+    # that cite it stay true; only new spans get new numbers.
+    matches, used = {}, set()
+    for s in new.spans.values():
+        match = by_key.get(span_key(s))
+        if match is None:
+            same_scope = by_scope.get((s["path"], s["side"], s["scope"]), [])
+            match = same_scope[0] if len(same_scope) == 1 else None
+        if match is not None and match["id"] not in used:
+            matches[s["id"]] = match
+            used.add(match["id"])
+    next_id = max([int(i[1:]) for i in old.spans] + [0]) + 1
+    renamed = []
+    for s in new.spans.values():
+        if s["id"] in matches:
+            s["id"] = matches[s["id"]]["id"]
+        else:
+            s["id"] = f"S{next_id}"
+            next_id += 1
+        renamed.append(s)
+    new.spans = {s["id"]: s for s in renamed}
+    new.store.write(f"{new.dir}/spans.json", renamed)
+    matches = {matches[k]["id"]: matches[k] for k in matches}
+
+    counts = {"unchanged": 0, "changed": 0, "new": 0}
+    flagged = []
+    for s in new.spans.values():
+        match = matches.get(s["id"])
+        if match is None:
+            counts["new"] += 1
+            continue
+        if match["id"] not in old_code:
+            old_code[match["id"]] = code(old, match)
+        changed = old_code[match["id"]] != code(new, s)
+        counts["changed" if changed else "unchanged"] += 1
+        for _, cid, role in old.attached(match["id"]):
+            new.state["attachments"].append([s["id"], cid, role])
+        if match["id"] in old.state["unjustified"]:
+            new.state["unjustified"][s["id"]] = old.state["unjustified"][match["id"]]
+        if changed and (old.attached(match["id"]) or match["id"] in old.state["unjustified"]):
+            flagged.append(s["id"])
+    new.state["changed_since_carried"] = flagged
+    new.state["carried_from"] = old_id
+    snapshots = [normalize(d["text"]) for d in new.manifest["design"]]
+    dropped = []
+    for st in old.statements():
+        if st["provenance"] == "given" and not any(normalize(st["quote"]) in t for t in snapshots):
+            dropped.append(st["id"])
+            continue
+        st.setdefault("reviews", [st.get("review")])
+        if new_id not in st["reviews"]:
+            st["reviews"].append(new_id)
+    new.graph = old.graph
+    new.save()
+    new.log("carry", {"from": old_id, **counts, "flagged": len(flagged), "dropped": dropped})
+    return {"from": old_id, **counts, "flagged": flagged, "dropped_statements": dropped}
+
+
+def previous_review(store, design_sources, exclude):
+    """The latest earlier review whose design text came from the same
+    sources, such as the same pull request."""
+    best = None
+    for m in sorted((store.dir / "reviews").glob("*/manifest.json")):
+        manifest = json.loads(m.read_text())
+        if manifest["id"] == exclude:
+            continue
+        if {d["source"] for d in manifest["design"]} & set(design_sources):
+            if best is None or manifest["created"] > best["created"]:
+                best = manifest
+    return best["id"] if best else None
+
+
 def cmd_reviewable(repo, args):
     """Pin the change, reusing a review already pinned to the same commits,
     and report whether it is ready for a human: exit 0 if both verdicts
@@ -528,14 +650,104 @@ def cmd_reviewable(repo, args):
                                    "design_file": args.design_file, "limit": args.limit,
                                    "stacked_on": args.stacked_on})()
         created, _ = cmd_init(repo, init_args)
+        new_manifest = store.read(f"reviews/{review_id}/manifest.json", {})
+        prior = previous_review(store, [d["source"] for d in new_manifest.get("design", [])],
+                                review_id)
+        if prior:
+            created["carried"] = carry(store, prior, review_id)
     store.current = review_id
     r = Review(repo, review_id)
     verdict, summary = cmd_check(r, args)
     ready = verdict["traced"] and verdict["explained"]
     data = {"review": review_id, "reviewable": ready, "check": verdict, "created": bool(created)}
     human = summary
+    carried = (created or {}).get("carried")
+    if carried:
+        data["carried"] = carried
+        human = (f"New head; carried review {carried['from']}: {carried['unchanged']} spans "
+                 f"unchanged, {carried['changed']} changed, {carried['new']} new; "
+                 f"{len(carried['flagged'])} carried spans changed and need a fresh look"
+                 + (f"; statements no longer in the design text: {', '.join(carried['dropped_statements'])}"
+                    if carried["dropped_statements"] else "") + "\n\n" + human)
     if not ready:
         nxt, nxt_human = cmd_next(r, type("A", (), {"path": None, "brief": False})())
         data["next"] = nxt
         human += "\n\nFirst unmet obligation:\n" + nxt_human
     return data, human, 0 if ready else 1
+
+
+def spans_summary(r, ids):
+    """Group span IDs by file as path:start-end lists."""
+    by = {}
+    for sid in sorted(ids, key=lambda s: int(s[1:])):
+        sp = r.spans[sid]
+        by.setdefault(sp["path"], []).append(f"{sid} {sp['start']}-{sp['end']}")
+    return [f"`{p}` {', '.join(v)}" for p, v in by.items()]
+
+
+# Implements [CPO§V29]
+def cmd_render(r, args):
+    """Write the review's statements and concepts as a design doc in the
+    store, one section per statement, so the size rules can check it."""
+    import textwrap
+    pr = next((re.search(r"/pull/(\d+)", d["source"]) for d in r.manifest["design"]
+               if "/pull/" in d["source"]), None)
+    prefix = f"PR{pr[1]}" if pr else "REVIEW"
+    title = (r.manifest["design"][0]["text"].splitlines()[0]
+             if r.manifest["design"] else f"Review {r.id}")
+    concepts = {c["id"]: c for c in r.graph["concepts"].values() if not c.get("merged_into")}
+    kids = {}
+    for c in concepts.values():
+        kids.setdefault(c.get("parent"), []).append(c["id"])
+    direct = {}
+    for sid, cid, role in r.state["attachments"]:
+        direct.setdefault(cid, set()).add(sid)
+
+    def wrap(text, indent):
+        return textwrap.fill(text, 78, initial_indent=indent,
+                             subsequent_indent=indent + "  ")
+
+    def concept_lines(cid, depth):
+        c = concepts[cid]
+        pad = "  " * depth
+        out = [wrap(f"- **{prefix}§{cid}:** **{c['name']}.** {c['claim']}", pad)]
+        for line in spans_summary(r, direct.get(cid, ())):
+            out.append(wrap(f"- Spans: {line}", pad + "  "))
+        for k in sorted(kids.get(cid, []), key=lambda x: int(x[1:])):
+            out += concept_lines(k, depth + 1)
+        return out
+
+    doc = [f"# {title}", "",
+           f"Generated by Concipio from review {r.id}. Statements quote the "
+           "design text; concepts and claims are the agents'.", ""]
+    mine = r.statements()
+    for st in sorted(mine, key=lambda s: int(s["id"][1:])):
+        doc += [f"## {st['id']}", "",
+                wrap(f"**{prefix}§{st['id']}:** {st['text']} *({st['provenance']})*", ""), ""]
+        for cid in sorted(kids.get(st["id"], []), key=lambda x: int(x[1:])):
+            doc += concept_lines(cid, 0)
+        doc.append("")
+    orphans = [c for c in kids.get(None, []) if c in concepts]
+    if orphans:
+        doc += ["## Undeclared behavior", ""]
+        for cid in orphans:
+            doc += concept_lines(cid, 0)
+        doc.append("")
+    if r.state["unjustified"]:
+        doc += ["## Unjustified", ""]
+        for sid, why in r.state["unjustified"].items():
+            sp = r.spans[sid]
+            doc.append(wrap(f"- {sid} `{sp['path']}` {sp['start']}-{sp['end']}: {why}", ""))
+        doc.append("")
+    out = r.store.dir / "gendoc" / f"{r.id}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(doc))
+    from . import lint as lint_mod
+    defs, errors = docs.find_definitions(out.parent, [out.name])
+    problems = lint_mod.lint(out.parent, [out.name], defs,
+                             args.statement_limit, args.section_limit)
+    data = {"path": str(out), "statements": len(mine), "concepts": len(concepts),
+            "problems": [p.__dict__ for p in problems], "errors": errors}
+    human = [f"Wrote {out}", f"  {len(mine)} statements, {len(concepts)} concepts"]
+    human += [f"  {p.rule}: {p.message}" for p in problems] or ["  Every design fits on a screen."]
+    return data, "\n".join(human)

@@ -26,6 +26,7 @@ class Definition:
     line: int
     text: str
     name: str
+    lines: int = 1
     parent: str | None = None
     children: list = field(default_factory=list)
     citations: list = field(default_factory=list)
@@ -131,7 +132,8 @@ def find_definitions(root, files):
             after_tag = DEFINITION.match(raw[i])
             rest = after_tag["rest"] if after_tag else m["rest"]
             text = re.sub(r"^\*\*[^*]+\*\*:?\s*", "", text)
-            d = Definition(tag, path, i + 1, text, statement_name(rest, text))
+            d = Definition(tag, path, i + 1, text, statement_name(rest, text),
+                           lines=len(body))
             # Implements [CPO§T38]
             indent = len(m["indent"])
             while open_items and open_items[-1][0] >= indent:

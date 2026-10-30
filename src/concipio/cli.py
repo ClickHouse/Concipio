@@ -9,7 +9,9 @@ import textwrap
 from dataclasses import asdict
 from importlib import resources
 
-from . import docs, review
+from pathlib import Path
+
+from . import docs, lint as lint_mod, review
 
 
 def emit(data, human, as_json):
@@ -104,6 +106,7 @@ REVIEW_COMMANDS = {
     ("check", None): review.cmd_check,
     ("status", None): review.cmd_status,
     ("record", None): review.cmd_record,
+    ("render", None): review.cmd_render,
 }
 
 
@@ -127,6 +130,11 @@ def build_parser():
     lst.add_argument("namespaces", nargs="*", help="limit to these namespaces, such as M or R")
     tree = add("tree", "show how statements refine one another")
     tree.add_argument("tags", nargs="*", help="roots to start from (default: all)")
+
+    ln = add("lint", "check that every design fits on a screen")
+    ln.add_argument("paths", nargs="*", help="Markdown files or directories (default: the repository)")
+    ln.add_argument("--statement-limit", type=int, default=lint_mod.STATEMENT_LIMIT)
+    ln.add_argument("--section-limit", type=int, default=lint_mod.SECTION_LIMIT)
 
     rv = sub.add_parser("review", help="start a review").add_subparsers(dest="sub", required=True)
     init = add("init", "pin a change and list its spans", rv)
@@ -187,7 +195,14 @@ def build_parser():
     rv2.add_argument("--stacked-on", action="append", metavar="BASE..HEAD")
     rv2.add_argument("--design-file", action="append", metavar="PATH")
     rv2.add_argument("--limit", type=int, default=review.spans_mod.DEFAULT_LIMIT)
-    add("check", "give the verdicts")
+    rv2.add_argument("--strict", action="store_true",
+                     help="fail on undeclared behavior too")
+    ck = add("check", "give the verdicts")
+    ck.add_argument("--strict", action="store_true",
+                    help="fail on undeclared behavior too: every span must reach a statement")
+    rd = add("render", "write the review as a design doc in the store and lint it")
+    rd.add_argument("--statement-limit", type=int, default=lint_mod.STATEMENT_LIMIT)
+    rd.add_argument("--section-limit", type=int, default=lint_mod.SECTION_LIMIT)
     add("status", "report progress and stalls")
     hp = sub.add_parser("help", help="print guidance").add_subparsers(dest="sub", required=True)
     hp.add_parser("agent", help="print the protocol for an agent running a review")
@@ -219,7 +234,9 @@ def dispatch(args):
 
     for e in errors:
         print(f"cpo: {e}", file=sys.stderr)
-    if args.command == "show":
+    if args.command == "lint":
+        status = cmd_lint(args, defs, repo)
+    elif args.command == "show":
         status = show_mixed(args, defs, repo)
     else:
         status = {"list": cmd_list, "tree": cmd_tree}[args.command](args, defs)
@@ -240,6 +257,20 @@ def run_review_command(repo, key, args):
     if args.command == "check":
         return 0 if data["traced"] and data["explained"] else 1
     return 0
+
+
+def cmd_lint(args, defs, repo):
+    files = docs.tracked_files(repo)
+    if args.paths:
+        want = [str(Path(p).resolve().relative_to(repo)) for p in args.paths]
+        files = [f for f in files if any(f == w or f.startswith(w.rstrip("/") + "/")
+                                         for w in want)]
+        defs = {t: d for t, d in defs.items() if d.path in files}
+    problems = lint_mod.lint(repo, files, defs, args.statement_limit, args.section_limit)
+    emit([asdict(p) for p in problems],
+         "\n".join(f"{p.path}:{p.line}: {p.rule}: {p.message}" for p in problems)
+         or "Every design fits on a screen.", args.json)
+    return 1 if problems else 0
 
 
 def show_mixed(args, defs, repo):

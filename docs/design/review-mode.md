@@ -98,10 +98,14 @@ runs the same on a repository that will never adopt Concipio.
 - **CPO§V10:** A span's identity is its path, its scope, and a quote, as for
   anchors [T10, T12]. Concipio reports any span whose quote is ambiguous
   within its scope, and widens the quote until it is unique.
-- **CPO§V11:** When a review moves to a new head, Concipio resolves every
-  span against it [T11]. Each span is *unchanged*, *moved*, *changed*, or
-  *gone*. Attachments and reviewer marks [V16] carry over, and a mark on a
-  changed span is flagged as made on older code.
+- **CPO§V11:** When a change gets a new head, as when it is rebased,
+  `cpo reviewable` pins a new review and carries the latest earlier review
+  of the same design text into it. A span carries when its path, scope, and
+  quote match, or failing that when its path and scope match exactly one
+  span; it keeps its ID, so claims that cite it stay true. A carried span
+  whose code changed returns to the remaining work, with its old attachment
+  shown, until an agent confirms or replaces it. Given statements carry only
+  if their quotes still appear in the new design text.
 
 ## The graph
 
@@ -122,30 +126,32 @@ runs the same on a repository that will never adopt Concipio.
 
 ## Commands
 
-- **CPO§V15:** These are the commands. Each prints text on a terminal and
-  JSON otherwise, for agents; `--human` and `--json` override the default:
+- **CPO§V15:** Every command prints text on a terminal and JSON otherwise, for
+  agents; `--human` and `--json` override the default.
 
-  | Command | Effect |
-  |---|---|
-  | `cpo review init <base>..<head>` | Write the manifest [V4] and list the spans |
-  | `cpo statement add` | Add a given or drafted statement [V6] |
-  | `cpo concept add`, `cpo concept edit` | Add or change a concept [M31] |
-  | `cpo concept merge`, `cpo concept rename` | Combine or rename concepts, recorded as such [R2] |
-  | `cpo attach`, `cpo detach` | Join a span to a concept, or undo it [V13] |
-  | `cpo unjustified` | Mark a span unjustified [V14] |
-  | `cpo check` | Give the verdicts [V17] |
-  | `cpo next [--path P]` | Give the next piece of work, with its context, optionally only from paths starting with P [V24] |
-  | `cpo status` | Report progress, stalls, and cost [V18] |
-  | `cpo record` | Record tokens an agent spent [V19] |
-  | `cpo reviewable <PR or range>` | Exit 0 if the change is ready for human review, or show the first unmet obligation [V28] |
-  | `cpo show <tag>...` | Show a statement, concept, or span: its name, text, location, and everything that cites or attaches to it [T37] |
-  | `cpo mark` | Record what the reviewer saw or concluded [V16] |
-  | `cpo help agent` | Print the agent protocol [V25] |
+| Command | Effect |
+|---|---|
+| `cpo review init <base>..<head>` | Write the manifest [V4] and list the spans |
+| `cpo statement add` | Add a given or drafted statement [V6] |
+| `cpo concept add`, `cpo concept edit` | Add or change a concept [M31] |
+| `cpo concept merge` | Combine two concepts, recorded as such; `concept edit` renames [R2] |
+| `cpo attach`, `cpo detach` | Join a span to a concept, or undo it [V13] |
+| `cpo unjustified` | Mark a span unjustified [V14] |
+| `cpo check [--strict]` | Give the verdicts; with `--strict`, fail on undeclared behavior too [V17, M42] |
+| `cpo render` | Write the review as a design doc in the store [V29] |
+| `cpo lint` | Check that every design fits on a screen [M41] |
+| `cpo next [--path P]` | Give the next piece of work, with its context, optionally only from paths starting with P [V24] |
+| `cpo status` | Report progress, stalls, and cost [V18] |
+| `cpo record` | Record tokens an agent spent [V19] |
+| `cpo reviewable <PR or range>` | Exit 0 if the change is ready for human review, or show the first unmet obligation [V28] |
+| `cpo show <tag>...` | Show a statement, concept, or span: its name, text, location, and everything that cites or attaches to it [T37] |
+| `cpo mark` | Record what the reviewer saw or concluded [V16] |
+| `cpo help agent` | Print the agent protocol [V25] |
 
 - **CPO§V24:** Concipio holds the review's state so the agent does not have
   to. `cpo next` returns the next piece of work: an unattached span with its
-  code, the statements, and the concepts that might fit it, or a concept that
-  lacks a claim. A small agent can run a whole sweep by calling `cpo next` and
+  code, its changed lines marked, and the concepts that might fit it, or a
+  concept that lacks a claim. A small agent can run a whole sweep by calling `cpo next` and
   answering, with no memory of its own between calls.
 
 - **CPO§V28:** `cpo reviewable` is the gate between the agents' work and the
@@ -154,6 +160,11 @@ runs the same on a repository that will never adopt Concipio.
   pass. Otherwise it shows the first unmet obligation and exits 1. Anything
   that can run a command and read an exit code can drive a change to
   reviewable: a skill, CI, or an editor.
+
+- **CPO§V29:** `cpo render` writes the review's statements and concepts to
+  the store as a Markdown design doc, one section per statement, with each
+  concept's spans beneath it, and checks that it fits on a screen [M41].
+  It is the design a review produces, in the form a repository could adopt.
 
 ## The reviewer's ledger
 

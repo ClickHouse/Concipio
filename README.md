@@ -66,6 +66,13 @@ from design: a product requirement, a process spec, and an algorithm spec are
 all design statements. A repository decides how deep its docs go. In review
 mode, the design text may be nothing more than a pull request description.
 
+**CPO§M41:** Every design fits on a screen. A statement longer than about 20
+lines becomes nested statements, and a section with more than about 60 lines
+of its own becomes subsections or a child doc. Sections and files are
+interchangeable for this rule; what matters is that a reader can take in one
+design at a time, then go deeper only where they need to. Docs that define no
+statements, such as notes and reports, are exempt.
+
 **CPO§M2:** Over time, kept concepts should lead a project toward a practice
 nobody has to impose. A master design that reads like a pitch; below it, docs
 at the level of a PRD; below those, docs detailed enough to nearly be code;
@@ -108,6 +115,9 @@ between the lowest design doc and the code.
   something its design text does not mention. That may be a bug, a feature
   nobody documented, or a concept the agent made up; the reviewer decides
   which.
+  - **CPO§M42:** A strict check fails on undeclared behavior too, so every
+    changed span must reach a design statement, given or drafted. Drafting
+    a statement to cover it is allowed, and its provenance shows [M38].
   - **CPO§M38:** Every design statement records its provenance: *given*, from
     design text that existed before the review, or *drafted*, written by the
     agent from the code. Coverage is reported against each separately. A
@@ -261,6 +271,8 @@ review teaches before any of them is built.
 These are the risks most likely to sink the project, the deciding ones
 first. Each sub-design that touches one must say how it handles it.
 
+### Cost
+
 - **CPO§R13:** **Toil.** Concipio costs more than it saves: reviewers read
   graphs instead of code, authors maintain tags nobody uses, and agents spend
   tokens on work they could have reused. This is the risk that decides
@@ -289,6 +301,8 @@ first. Each sub-design that touches one must say how it handles it.
     ever reducing what remains. Because the agent drives [M9], Concipio
     cannot stop it. *Mitigation:* make stalls visible [M22] so that any
     harness can act on them.
+### Understanding
+
 - **CPO§R14:** **Shown is not understood.** A walkthrough completes, every
   verdict passes, and the reviewer still could not say what happens when the
   code fails halfway. *Mitigations:* end each step with a question the
@@ -307,6 +321,8 @@ first. Each sub-design that touches one must say how it handles it.
     states its top-level concepts first and asks the reviewer to confirm or
     correct them before going deeper [M18]; a reviewer who cannot is told
     so, which is the point [M29].
+### The quality of the map
+
 - **CPO§R1:** **Goodhart's law on coverage.** An agent told to cover every
   span will do so cheaply, with vague catch-all concepts. Coverage stays at
   100% and carries no information. This risk should shrink as a repository's
@@ -332,6 +348,18 @@ first. Each sub-design that touches one must say how it handles it.
   reuses existing concepts before creating new ones; renames and merges are
   explicit operations; a merge pass presents near-duplicates to a human as a
   choice.
+
+- **CPO§R5:** **Unreliable assumptions.** Small models miss real assumptions
+  and invent trivial ones ("assumes `x` is an integer"). Matching an
+  assumption at one site to the code that guarantees it elsewhere is
+  expensive at any model size. *Mitigations:* a fixed vocabulary with
+  checklists for each language; report only what neither the type system nor
+  a local check enforces; treat assertions already in the code as seeds; make
+  the comment the record, so the agent checks a written claim rather than
+  discovering an unwritten one.
+
+### Anchors and languages
+
 - **CPO§R3:** **Fragile anchors.** A refactor or a reformat breaks anchors
   across the codebase, and the whole graph goes stale at once.
   *Mitigations:* prefer citations in comments, which move with the code;
@@ -342,14 +370,6 @@ first. Each sub-design that touches one must say how it handles it.
     the graph in noise; anchoring whole files says nothing. *Mitigation:*
     anchor to declarations and top-level blocks by default, and to spans
     within one only when it serves more than one concept.
-- **CPO§R5:** **Unreliable assumptions.** Small models miss real assumptions
-  and invent trivial ones ("assumes `x` is an integer"). Matching an
-  assumption at one site to the code that guarantees it elsewhere is
-  expensive at any model size. *Mitigations:* a fixed vocabulary with
-  checklists for each language; report only what neither the type system nor
-  a local check enforces; treat assertions already in the code as seeds; make
-  the comment the record, so the agent checks a written claim rather than
-  discovering an unwritten one.
 - **CPO§R10:** **Language blind spots.** C macros hide control flow, and Ruby
   metaprogramming hides what code exists at all. *Mitigation:* where static
   structure is incomplete, let the agent use test runs or a language server
@@ -357,31 +377,21 @@ first. Each sub-design that touches one must say how it handles it.
 
 ## Milestones
 
-1. **Review an agent-written change.** Roughly 1,700 lines across Ruby
-   models, a background job, guest scripts, and specs, stacked on an
-   earlier change, in a repository that has not adopted Concipio. The
-   reviewer knows the codebase only at a high level and does not read
-   Ruby. The milestone runs on the first two rungs of adoption [M39]: an
-   agent sweeps the earlier change first, and the review builds on the
-   concepts kept from it. It produces:
-   - a review manifest [M32];
-   - a route from concepts the reviewer knows to the mechanisms the change
-     uses;
-   - for each important claim, the code, the Ruby needed to read it, the tests
-     that assert it, and what remains uncertain;
-   - both ledgers [M34];
-   - a cost record [R13].
-
-   Before the walkthrough, a model that did not write the change reads the
-   code and seals a set of questions with reference answers. The milestone
-   passes if, afterward, the reviewer's written answers hold up against the
-   code: the operation's sequence, its persistence and failure boundaries,
-   what a retry does, and where the code behind each answer lives. A
-   controlled comparison is out of reach with one reviewer, so the evidence is
-   these answers and the cost record.
-2. **Understand everything: a kernel module.** Full coverage of a C kernel module
-   (device-mapper), including documented assumptions about units, execution
-   context, locking, and on-disk format.
+1. **Enforce the hierarchy.** Two mechanical checks hold on a real change
+   and on Concipio's own docs: every changed line reaches a design statement
+   [M42], and every design fits on a screen [M41]. The test change is
+   an agent-written pull request of about 1,700 lines across Ruby models,
+   a background job, guest scripts, and specs, in a
+   repository that has not adopted Concipio. Its design text is the pull
+   request description, and everything Concipio writes stays in the store
+   [M39]. The checks must keep holding as the change is rebased.
+2. **Prove it on a kernel module.** A C codebase adopts Concipio in its own
+   repository, with
+   its existing design as the master. Every line of its C, including the
+   kernel module, traces to a design; assumptions about units,
+   execution context, locking, and on-disk format are written down [M16];
+   and a walkthrough is measured by what the reviewer can answer afterward
+   and what it cost [R13, R14].
 3. **Trace this repository.** Once traceability is built, Concipio traces its
    own code to this document.
 

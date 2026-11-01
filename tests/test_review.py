@@ -264,3 +264,20 @@ def test_regions_sharing_a_scope_keep_their_own_records(repo, capsys):
     shown = {sid: [a[1] for a in run(capsys, "show", sid)[1][0]["attachments"]]
              for sid in (first, last)}
     assert shown == {first: ["C1"], last: ["C2"]}
+
+
+def test_why_traces_a_line_to_its_design(repo, capsys):
+    (repo / "pr.md").write_text("Grow volumes online. Naps between checks.\n")
+    run(capsys, "review", "init", "HEAD~1..HEAD", "--design-file", "pr.md")
+    run(capsys, "statement", "add", "--quote", "Grow volumes online.")
+    run(capsys, "statement", "add", "--quote", "Naps between checks.", "--parent", "D1")
+    run(capsys, "concept", "add", "--name", "Napping grow", "--parent", "D2", "--claim", "S1")
+    _, d = run(capsys, "check")
+    for sid in d["uncovered_spans"]:
+        run(capsys, "attach", sid, "C1")
+    _, w = run(capsys, "why", "app.rb:8")
+    assert w["region"]["scope"] == "Grower#grow" and w["record"] is not None
+    chain = w["concepts"][0]
+    assert chain["chain"][0]["name"] == "Napping grow"
+    assert [st["id"] for st in chain["statements"]] == ["D2", "D1"]
+    assert any(m["scope"] == "Grower#keep" for m in chain["mechanism"])

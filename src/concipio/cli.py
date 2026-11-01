@@ -214,6 +214,9 @@ def build_parser():
     rd.add_argument("--statement-limit", type=int, default=lint_mod.STATEMENT_LIMIT)
     rd.add_argument("--section-limit", type=int, default=lint_mod.SECTION_LIMIT)
     add("status", "report progress and stalls")
+    wy = add("why", "explain why a line of code exists")
+    wy.add_argument("target", help="path:line")
+    wy.add_argument("--at", default="HEAD", help="the commit to read the file at (default HEAD)")
     sub.add_parser("lsp", help="run a language server on stdio for editors")
     add("migrate", "convert a store that filed decisions by review into records")
     hp = sub.add_parser("help", help="print guidance").add_subparsers(dest="sub", required=True)
@@ -243,6 +246,11 @@ def dispatch(args):
         return 0
     repo = docs.repo_root()
     key = (args.command, getattr(args, "sub", None))
+    if args.command == "why":
+        from . import why
+        data = why.why(repo, args.target, args.at)
+        emit(data, why.describe(data), args.json)
+        return 0
     if args.command in ("review", "reviewable", "migrate") or key in REVIEW_COMMANDS:
         with review.Store(repo).lock():
             return run_review_command(repo, key, args)

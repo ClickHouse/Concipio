@@ -154,6 +154,7 @@ runs the same on a repository that will never adopt Concipio.
 | `cpo reviewable <PR or range>` | Exit 0 if the change is ready for human review, or show the first unmet obligation [V28] |
 | `cpo show <tag>...` | Show a statement, concept, or span: its name, text, location, and everything that cites or attaches to it [T37] |
 | `cpo mark` | Record what the reviewer saw or concluded [V16] |
+| `cpo why <path:line>` | Explain why a line exists: its record, the design above it, and its mechanism [M46] |
 | `cpo lsp` | Serve editors over the Language Server Protocol [M43] |
 | `cpo help agent` | Print the agent protocol [V25] |
 

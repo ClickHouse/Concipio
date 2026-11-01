@@ -84,3 +84,10 @@ would not, say nothing; the concepts stay in the store either way.
 When the change merges, its concepts should join the design of the branch it
 merged into: merge duplicates with the concepts already there, and make the
 review's cornerstone a child of that branch's design.
+
+## Asking why
+
+Concipio also answers questions outside a review. Before reading files to
+learn why some code exists, run `cpo why <path>:<line>`. It returns the
+code's concepts, the design statements above them, and the other regions
+that implement the same thing, usually in a few hundred tokens.

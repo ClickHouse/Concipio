@@ -3,9 +3,10 @@
 Parent: [Review mode](review-mode.md)
 
 **Status: partly built.** Records, fingerprints, scope-at-a-time matching,
-supersession, TOML design files, and the migration work [K2, K3, K4, K5, K8, K9,
+supersession, TOML design files, compact record files, and the migration
+work, and `cpo why` reads them [K2, K3, K4, K5, K8, K9,
 K13, K16, K21]. Not yet built: `cpo confirm` [K15], records at enclosing
-scopes [K17], renames [K6], provenance re-anchoring [K19], the blob cache
+scopes [K17], which `cpo why` approximates from sibling records, renames [K6], provenance re-anchoring [K19], the blob cache
 [K10], and review aliasing [K20]. Manifests are still JSON with their
 design text inside, not Markdown snapshots [K8].
 

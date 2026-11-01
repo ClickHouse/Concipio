@@ -241,4 +241,10 @@ code from outside it.
 
 ## Open questions
 
+- Should a definition carry a stable short name beside its number, as the
+  C++ standard cites `[stmt.if]` alongside its section numbers? A citation
+  could then read `[GROW§3 park-map]`, and Concipio could check that the
+  name still matches the number. It is not yet clear whether agents or
+  people would rather write the number, the name, or both.
+
 - How does a design doc mark a statement planned or descriptive [M5, T29]?

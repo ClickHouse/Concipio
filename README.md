@@ -152,6 +152,11 @@ between the lowest design doc and the code.
     sweep has stalled: the remaining work stops shrinking, or the same spans
     are attached and detached repeatedly. The agent or its harness decides
     what to do about a stall.
+  - **CPO§M46:** Concipio answers "why" for agents too. Asked about a line or
+    a symbol, it returns the chain of concepts and statements above it and
+    the other regions of its mechanism [K17, K18], in a few hundred tokens,
+    where an agent would otherwise read file after file to reconstruct the
+    same rationale. Large models gain as much from this as small ones.
   - **CPO§M10:** Kept concepts are what make small models useful. Without a
     map, a sweep must invent concepts, which takes a large model. With one, a
     sweep classifies each change against existing concepts, which small
@@ -166,6 +171,8 @@ between the lowest design doc and the code.
   resolves or is reported as unverified. A failing verdict comes with the list
   of what remains. Neither verdict says the reviewer understood anything; only
   the reviewer can say that [M35].
+### Adoption
+
 - **CPO§M28:** Rigor is opt-in and incremental. In review mode, the concept
   graph lives in a per-user store outside the repository; nothing is written
   to the repository, ratified, or linted. Concepts persist there from one
@@ -225,7 +232,7 @@ between the lowest design doc and the code.
     reference links that stay out of the way, and the language server
     handles everything finer.
 
-### Assumptions
+### Assumptions and decisions
 
 - **CPO§M16:** An assumption is something code at one site relies on that is
   established elsewhere, with no syntax connecting the two. Code should state
@@ -234,6 +241,13 @@ between the lowest design doc and the code.
   - **CPO§M17:** Assumptions are classified by a fixed vocabulary that a
     repository can extend later. Contract programming is one acceptable
     format, not a goal.
+- **CPO§M47:** A decision is recorded with its reason, not as a ruling. It
+  names who decided, a person or an agent, why, and the statements,
+  assumptions, or measurements the reason rests on. Neither a person's word
+  nor "the way it works" is a reason by itself.
+  - **CPO§M48:** A decision whose premises change is flagged for review,
+    not silently kept. "We chose X because Y" should be questioned as soon
+    as Y stops being true.
 
 ## Traceability, a later hypothesis
 
@@ -245,10 +259,13 @@ review teaches before any of them is built.
   already read, so a pull request shows its concept changes beside its code
   changes. By default Concipio adds no files of its own. A repository that
   needs much Concipio metadata has knowledge that belongs in its docs.
-  - **CPO§M20:** Stored links run one way, from the more specific to the
-    less: code cites design statements, and detailed docs cite broader ones.
-    Specific things churn more. Concipio derives every downward view: a doc's
-    children, and the code and tests behind a statement.
+  - **CPO§M20:** Links name stable identities, never positions, and a link
+    never forces its target to change when its source does. Code cites
+    design statements, and detailed docs cite broader ones; a design may also
+    cite a stable tag defined in a code comment. What a link must not do is
+    make a broad doc a choke point that every narrower change has to edit,
+    so a doc's children, and the code and tests behind a statement, are
+    views Concipio derives rather than lists anyone maintains.
     - **CPO§M24:** Every design doc cites its parent. Code and docs that
       cannot reach the master by following citations upward fail the check,
       just as unreachable code is dead code.
@@ -417,7 +434,9 @@ Concipio borrows from requirements-traceability tools (StrictDoc, Doorstop,
 Sphinx-Needs, and Doxygen's `\requirement`, `\satisfies`, and `\verifies`),
 concern-mapping research (concept assignment, feature location, concern
 graphs), annotation anchoring (W3C Web Annotation, Hypothesis), and guided
-review (CodeTour, change decomposition). [docs/consultations](docs/consultations)
+review (CodeTour, change decomposition), and records decisions as
+architecture decision records do, adding links from each reason to the
+statements it rests on. [docs/consultations](docs/consultations)
 holds the surveys behind this list.
 
 ## Design docs
@@ -426,6 +445,8 @@ This list is for readers; under [M20], Concipio will generate it.
 
 - [Review mode](docs/design/review-mode.md): manifest, spans, concept graph,
   commands, and verdicts [M9, M10, M11, M12, M21, M22, M28, M31, M32, M37, M38, M39, M40, R11]
+- [The store](docs/design/store.md), a design for keying review decisions
+  to code rather than to reviews [M28, R3, R6]
 - [Trace format](docs/design/trace-format.md), a draft for traceability
   [M13, M14, M15, M20, M24, M36, R3, R4, R7]
 

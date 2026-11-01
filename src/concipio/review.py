@@ -7,7 +7,12 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+import tomllib
+
+import tomli_w
+
 from . import docs, spans as spans_mod
+from .records import Records, drop_none, evidence, fingerprint
 from .store import Store
 
 MUTATING = {"statement add", "statement edit", "concept add", "concept edit", "concept merge",
@@ -18,6 +23,28 @@ SPAN_ID = re.compile(r"\bS\d+\b")
 
 class ReviewError(Exception):
     pass
+
+
+GRAPH_FILES = {"statements": "statements.toml", "concepts": "concepts.toml",
+               "next": "meta.toml"}
+
+
+def load_graph(store):
+    """The project's design: statements and concepts, and the counters that
+    mint their IDs."""
+    graph = {}
+    for key, name in GRAPH_FILES.items():
+        p = store.dir / name
+        graph[key] = tomllib.loads(p.read_text()).get(key, {}) if p.exists() else {}
+    return graph
+
+
+def save_graph(store, graph):
+    for key, name in GRAPH_FILES.items():
+        p = store.dir / name
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(tomli_w.dumps({key: drop_none(graph[key])}))
+        tmp.replace(p)
 
 
 def rev(repo, ref):
@@ -45,6 +72,8 @@ class Review:
     def __init__(self, repo, review_id=None):
         self.repo = Path(repo)
         self.store = Store(repo)
+        if (self.store.dir / "graph.json").exists():
+            raise ReviewError("this store predates records; run cpo migrate")
         self.id = review_id or self.store.current
         if not self.id:
             raise ReviewError("no review; run cpo review init <base>..<head>")
@@ -53,14 +82,72 @@ class Review:
         if self.manifest is None:
             raise ReviewError(f"review {self.id} has no manifest")
         self.spans = {s["id"]: s for s in self.store.read(f"{self.dir}/spans.json", [])}
-        self.state = self.store.read(f"{self.dir}/state.json",
-                                     {"attachments": [], "unjustified": {}, "marks": []})
-        self.graph = self.store.read("graph.json",
-                                     {"statements": {}, "concepts": {}, "next": {}})
+        self.graph = load_graph(self.store)
+        self.records = Records(self.store)
+        self.state = self.load_state()
+        self.confirmed = set()
+
+    # Implements [CPO§K5]
+    def load_state(self):
+        """Derive this review's attachments and marks from the records that
+        apply to its spans. A span whose scope has only a stale record shows
+        that record's decisions, flagged for a fresh look."""
+        state = {"attachments": [], "unjustified": {}, "explained_by": {},
+                 "changed_since_carried": []}
+        self.matches = self.records.match_all(list(self.spans.values()))
+        for s in self.spans.values():
+            applies, stale = self.matches[s["id"]]
+            record = applies or stale
+            if record is None:
+                continue
+            for c in record.get("concepts", []):
+                cid = c["id"]
+                seen = set()
+                while self.graph["concepts"].get(cid, {}).get("merged_into") and cid not in seen:
+                    seen.add(cid)
+                    cid = self.graph["concepts"][cid]["merged_into"]
+                entry = [s["id"], cid, c["role"]]
+                if entry not in state["attachments"]:
+                    state["attachments"].append(entry)
+            mark = record.get("unjustified")
+            if mark:
+                state["unjustified"][s["id"]] = mark["reason"]
+                if mark.get("see"):
+                    state["explained_by"][s["id"]] = mark["see"]
+            if applies is None:
+                state["changed_since_carried"].append(s["id"])
+        self.loaded = self.decisions(state)
+        return state
+
+    def decisions(self, state):
+        out = {}
+        for sid in self.spans:
+            concepts = sorted((c, role) for s, c, role in state["attachments"] if s == sid)
+            reason = state["unjustified"].get(sid)
+            mark = None
+            if reason is not None:
+                mark = {"reason": reason}
+                if state.get("explained_by", {}).get(sid):
+                    mark["see"] = state["explained_by"][sid]
+            out[sid] = (concepts, mark)
+        return out
 
     def save(self):
-        self.store.write(f"{self.dir}/state.json", self.state)
-        self.store.write("graph.json", self.graph)
+        save_graph(self.store, self.graph)
+        flagged = set(self.state.get("changed_since_carried", []))
+        now = self.decisions(self.state)
+        commit = self.manifest["head"]
+        for sid, decided in now.items():
+            if sid in flagged or (decided == self.loaded.get(sid)
+                                  and sid not in self.confirmed):
+                continue
+            s = self.spans[sid]
+            record = self.records.decide(
+                s, self.id, commit if s["side"] == "new" else self.manifest["base"],
+                decided[0], decided[1], self.matches.get(sid))
+            self.matches[sid] = (record, None)
+        self.loaded = now
+        self.confirmed = set()
 
     def mint(self, letter):
         n = self.graph["next"].get(letter, 1)
@@ -135,6 +222,7 @@ class Review:
         flagged = self.state.get("changed_since_carried", [])
         if sid in flagged:
             flagged.remove(sid)
+            self.confirmed.add(sid)
 
     def unexplained(self):
         out = []
@@ -178,6 +266,8 @@ def pr_range(repo, pr):
 def cmd_init(repo, args):
     base, head = split_range(repo, args.range)
     store = Store(repo)
+    if (store.dir / "graph.json").exists():
+        raise ReviewError("this store predates records; run cpo migrate")
     review_id = f"{base[:10]}..{head[:10]}"
     design = []
     for path in args.design_file or []:
@@ -198,8 +288,9 @@ def cmd_init(repo, args):
         "span_limit": args.limit, "parsers": parser_versions(),
         "created": time.time(),
     }
+    spans_ = identify(repo, store, base, head, [asdict(s) for s in found])
     store.write(f"reviews/{review_id}/manifest.json", manifest)
-    store.write(f"reviews/{review_id}/spans.json", [asdict(s) for s in found])
+    store.write(f"reviews/{review_id}/spans.json", spans_)
     store.current = review_id
     by_file = {}
     for s in found:
@@ -215,6 +306,46 @@ def cmd_init(repo, args):
              "Design text: " + (", ".join(data["design_sources"]) or "none")]
     human += [f"  {n:4}  {p}" for p, n in sorted(by_file.items())]
     return data, "\n".join(human)
+
+
+def identify(repo, store, base, head, found):
+    """Fingerprint each span, and give it the ID of the record that applies
+    to it or of the stale record its scope has, so that claims citing it
+    stay true; spans no record knows get new IDs [K2, K4]."""
+    texts = {}
+
+    def text_of(side, path):
+        key = (side, path)
+        if key not in texts:
+            texts[key] = (spans_mod.file_at(repo, head if side == "new" else base, path)
+                          or "").splitlines()
+        return texts[key]
+
+    records = Records(store)
+    graph = load_graph(store)
+    used, fresh = set(), []
+    for n, s in enumerate(found):
+        lines = text_of(s["side"], s["path"])[s["start"] - 1:s["end"]]
+        s["fingerprint"] = fingerprint("\n".join(lines))
+        s["first"] = evidence(lines)[0]
+        s["id"] = f"new{n}"
+    matches = records.match_all(found)
+    for s in found:
+        applies, stale = matches[s["id"]]
+        known = applies or stale
+        if known is not None and known["id"] not in used:
+            s["id"] = known["id"]
+            used.add(known["id"])
+        else:
+            fresh.append(s)
+    top = max([graph["next"].get("S", 1) - 1, records.highest_id()]
+              + [int(i[1:]) for i in used] + [0])
+    for s in fresh:
+        top += 1
+        s["id"] = f"S{top}"
+    graph["next"]["S"] = top + 1
+    save_graph(store, graph)
+    return found
 
 
 def parser_versions():
@@ -600,72 +731,18 @@ def show_item(r, ident):
     return None
 
 
-def span_key(s):
-    return (s["path"], s["side"], s["scope"], s["quote"])
-
-
 # Implements [CPO§V11]
 def carry(store, old_id, new_id):
-    """Carry an earlier review's statements, attachments, and marks to a
-    review of a new head. A span carries when its path, scope, and quote
-    match one in the old review; if its code changed, the carried
-    attachment is flagged for a fresh look."""
+    """Carry an earlier review's statements to a review of a new head, and
+    report how its spans fared. Decisions need no carrying: records apply
+    to any head whose regions match them [K4]."""
     old = Review(store.repo, old_id)
     new = Review(store.repo, new_id)
-    by_key = {span_key(s): s for s in old.spans.values()}
-    by_scope = {}
-    for s in old.spans.values():
-        by_scope.setdefault((s["path"], s["side"], s["scope"]), []).append(s)
-    old_code = {}
-
-    def code(rv, s):
-        rev_ = rv.manifest["head"] if s["side"] == "new" else rv.manifest["base"]
-        text = spans_mod.file_at(rv.repo, rev_, s["path"]) or ""
-        return "\n".join(text.splitlines()[s["start"] - 1:s["end"]])
-
-    # A span that matches one in the old review keeps its ID, so claims
-    # that cite it stay true; only new spans get new numbers.
-    matches, used = {}, set()
-    for s in new.spans.values():
-        match = by_key.get(span_key(s))
-        if match is None:
-            same_scope = by_scope.get((s["path"], s["side"], s["scope"]), [])
-            match = same_scope[0] if len(same_scope) == 1 else None
-        if match is not None and match["id"] not in used:
-            matches[s["id"]] = match
-            used.add(match["id"])
-    next_id = max([int(i[1:]) for i in old.spans] + [0]) + 1
-    renamed = []
-    for s in new.spans.values():
-        if s["id"] in matches:
-            s["id"] = matches[s["id"]]["id"]
-        else:
-            s["id"] = f"S{next_id}"
-            next_id += 1
-        renamed.append(s)
-    new.spans = {s["id"]: s for s in renamed}
-    new.store.write(f"{new.dir}/spans.json", renamed)
-    matches = {matches[k]["id"]: matches[k] for k in matches}
-
     counts = {"unchanged": 0, "changed": 0, "new": 0}
-    flagged = []
+    flagged = list(new.state["changed_since_carried"])
     for s in new.spans.values():
-        match = matches.get(s["id"])
-        if match is None:
-            counts["new"] += 1
-            continue
-        if match["id"] not in old_code:
-            old_code[match["id"]] = code(old, match)
-        changed = old_code[match["id"]] != code(new, s)
-        counts["changed" if changed else "unchanged"] += 1
-        for _, cid, role in old.attached(match["id"]):
-            new.state["attachments"].append([s["id"], cid, role])
-        if match["id"] in old.state["unjustified"]:
-            new.state["unjustified"][s["id"]] = old.state["unjustified"][match["id"]]
-        if changed and (old.attached(match["id"]) or match["id"] in old.state["unjustified"]):
-            flagged.append(s["id"])
-    new.state["changed_since_carried"] = flagged
-    new.state["carried_from"] = old_id
+        applies, stale = new.matches[s["id"]]
+        counts["unchanged" if applies else "changed" if stale else "new"] += 1
     snapshots = [normalize(d["text"]) for d in new.manifest["design"]]
     dropped = []
     for st in old.statements():
@@ -675,8 +752,7 @@ def carry(store, old_id, new_id):
         st.setdefault("reviews", [st.get("review")])
         if new_id not in st["reviews"]:
             st["reviews"].append(new_id)
-    new.graph = old.graph
-    new.save()
+    save_graph(store, old.graph)
     new.log("carry", {"from": old_id, **counts, "flagged": len(flagged), "dropped": dropped})
     return {"from": old_id, **counts, "flagged": flagged, "dropped_statements": dropped}
 
@@ -872,7 +948,7 @@ def cmd_render(r, args):
              if k not in r.state.get("explained_by", {})}
     if loose:
         doc += ["## Unjustified", ""]
-        for sid, why in loose.items():
+        for sid, why in sorted(loose.items(), key=lambda kv: int(kv[0][1:])):
             sp = r.spans[sid]
             doc.append(wrap(f"- {sid} `{sp['path']}`: {why}", ""))
         doc.append("")
@@ -892,3 +968,83 @@ def cmd_render(r, args):
     human = [f"Wrote {out}", f"  {len(mine)} statements, {len(concepts)} concepts"]
     human += [f"  {p.rule}: {p.message}" for p in problems] or ["  Every design fits on a screen."]
     return data, "\n".join(human)
+
+
+# Implements [CPO§K13]
+def cmd_migrate(repo, args):
+    """Convert a store that filed decisions by review into records keyed to
+    code. Reviews convert oldest first, so a newer head's record supersedes
+    an older one's for the same scope. No decision is remade."""
+    store = Store(repo)
+    old_graph = store.dir / "graph.json"
+    if not old_graph.exists():
+        return compact_store(store)
+    graph = json.loads(old_graph.read_text())
+    manifests = sorted((json.loads(p.read_text()) for p in
+                        (store.dir / "reviews").glob("*/manifest.json")),
+                       key=lambda m: m["created"])
+    top = 0
+    for m in manifests:
+        for sp in store.read(f"reviews/{m['id']}/spans.json", []):
+            top = max(top, int(sp["id"][1:]))
+    graph.setdefault("next", {})["S"] = max(graph["next"].get("S", 1), top + 1)
+    save_graph(store, {k: graph.get(k, {}) for k in GRAPH_FILES})
+    records = Records(store)
+    counts = {"reviews": 0, "records": 0}
+    for m in manifests:
+        rdir = f"reviews/{m['id']}"
+        spans_ = store.read(f"{rdir}/spans.json", [])
+        texts = {}
+        for sp in spans_:
+            key = (sp["side"], sp["path"])
+            if key not in texts:
+                rev_ = m["head"] if sp["side"] == "new" else m["base"]
+                texts[key] = (spans_mod.file_at(Path(m["repo"]), rev_, sp["path"])
+                              or "").splitlines()
+            lines = texts[key][sp["start"] - 1:sp["end"]]
+            sp["fingerprint"] = fingerprint("\n".join(lines))
+            sp["first"] = evidence(lines)[0]
+        store.write(f"{rdir}/spans.json", spans_)
+        state = store.read(f"{rdir}/state.json", None)
+        if state is None:
+            continue
+        flagged = set(state.get("changed_since_carried", []))
+        explained = state.get("explained_by", {})
+        matches = records.match_all(spans_)
+        for sp in spans_:
+            if sp["id"] in flagged:
+                continue
+            concepts = sorted((c, role) for s_, c, role in state["attachments"] if s_ == sp["id"])
+            mark = None
+            if sp["id"] in state["unjustified"]:
+                mark = {"reason": state["unjustified"][sp["id"]]}
+                if explained.get(sp["id"]):
+                    mark["see"] = explained[sp["id"]]
+            if concepts or mark:
+                commit = m["head"] if sp["side"] == "new" else m["base"]
+                records.decide(sp, m["id"], commit, concepts, mark, matches[sp["id"]])
+                counts["records"] += 1
+        (store.dir / rdir / "state.json").rename(store.dir / rdir / "state.json.premigration")
+        counts["reviews"] += 1
+    old_graph.rename(store.dir / "graph.json.premigration")
+    return ({"migrated": True, **counts},
+            f"Migrated {counts['reviews']} reviews into {counts['records']} record writes.")
+
+
+def compact_store(store):
+    """Rewrite records and span lists written in an older, wordier form."""
+    records = Records(store)
+    files = 0
+    if records.dir.exists():
+        for p in records.dir.rglob("*.toml"):
+            code_path = str(p.relative_to(records.dir))[:-len(".toml")]
+            records.of(code_path)
+            records.save(code_path)
+            files += 1
+    for p in (store.dir / "reviews").glob("*/spans.json"):
+        spans_ = json.loads(p.read_text())
+        for sp in spans_:
+            sp["first"] = (sp.get("first") or [])[:1]
+            sp.pop("last", None)
+        p.write_text(json.dumps(spans_, indent=2, ensure_ascii=False) + "\n")
+    return {"migrated": False, "compacted_files": files}, f"Compacted {files} record files."

@@ -215,6 +215,7 @@ def build_parser():
     rd.add_argument("--section-limit", type=int, default=lint_mod.SECTION_LIMIT)
     add("status", "report progress and stalls")
     sub.add_parser("lsp", help="run a language server on stdio for editors")
+    add("migrate", "convert a store that filed decisions by review into records")
     hp = sub.add_parser("help", help="print guidance").add_subparsers(dest="sub", required=True)
     hp.add_parser("agent", help="print the protocol for an agent running a review")
     return parser
@@ -242,7 +243,7 @@ def dispatch(args):
         return 0
     repo = docs.repo_root()
     key = (args.command, getattr(args, "sub", None))
-    if args.command in ("review", "reviewable") or key in REVIEW_COMMANDS:
+    if args.command in ("review", "reviewable", "migrate") or key in REVIEW_COMMANDS:
         with review.Store(repo).lock():
             return run_review_command(repo, key, args)
     _, defs, errors = docs.load()
@@ -259,6 +260,10 @@ def dispatch(args):
 
 
 def run_review_command(repo, key, args):
+    if args.command == "migrate":
+        data, human = review.cmd_migrate(repo, args)
+        emit(data, human, args.json)
+        return 0
     if args.command == "review":
         data, human = review.cmd_init(repo, args)
         emit(data, human, args.json)

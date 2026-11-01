@@ -2,8 +2,12 @@
 
 Parent: [Review mode](review-mode.md)
 
-**Status: design, not built.** This replaces the store layout that review
-mode uses today [V12, V22], and the carry-over between heads [V11].
+**Status: partly built.** Records, fingerprints, scope-at-a-time matching,
+supersession, TOML design files, and the migration work [K2, K3, K4, K5, K8, K9,
+K13, K16, K21]. Not yet built: `cpo confirm` [K15], records at enclosing
+scopes [K17], renames [K6], provenance re-anchoring [K19], the blob cache
+[K10], and review aliasing [K20]. Manifests are still JSON with their
+design text inside, not Markdown snapshots [K8].
 
 The store keeps what agents and reviewers decided about a repository's code,
 outside the repository [M28]. Today it files that work by review, so every
@@ -40,16 +44,19 @@ files.
 
 - **CPO§K3:** A record holds what was decided about one region: the concepts
   it serves, in which role, or an unjustified mark. It also holds the
-  region's fingerprint, its first and last three lines as evidence a person
-  can read, its line range at the commit where it was reviewed, that commit,
-  and the review that made the decision.
+  region's fingerprint, its first line, its line range at the commit where
+  it was reviewed, that commit, and the review that made the decision. The
+  rest of the region's text is in git at that commit, where `cpo show` and
+  the language server read it; copying it into records doubled their size.
   - **CPO§K16:** When a changed region is reviewed again, its new record
     names the record it supersedes. A region's records then form a history
     like blame's, one entry per change to the code rather than one per head.
 - **CPO§K4:** A record applies at any commit whose tree has a region with the
   same path, scope, and fingerprint, whatever the commit's hash. A rebase,
   squash, or cherry-pick that leaves a region's text alone leaves its record
-  in force, so a record is written once, not once per head.
+  in force, so a record is written once, not once per head. A superseded
+  record still applies wherever its old text stands, such as at the commit
+  it was reviewed at; superseding only says a newer version exists.
 - **CPO§K5:** A record goes stale when its region's scope still exists but
   its fingerprint differs. A stale record never applies. `cpo check` counts
   its region as uncovered, and `cpo next` offers it to an agent with the old
@@ -94,8 +101,9 @@ files.
   - `regions/`, one file per code file, mirroring the repository's paths;
   - `reviews/<base>..<head>/`, each review's manifest, its design text
     snapshots as Markdown, and its command log.
-- **CPO§K21:** A region file lists its records in the source file's order,
-  each with its first and last lines. Two regions with identical text are
+- **CPO§K21:** A region file lists its records in the source file's order.
+  Scopes are written relative to the file, and the commit and review most
+  records share are written once, as the file's defaults. Two regions with identical text are
   told apart by the records around them, as a diff places a hunk by its
   context. Identical regions are also reported as duplication [M6], since
   code repeated closely enough to collide is usually code that should be

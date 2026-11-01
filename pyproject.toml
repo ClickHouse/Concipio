@@ -4,6 +4,7 @@ version = "0.0.1"
 description = "Map every changed line of code to the concept it serves"
 requires-python = ">=3.11"
 dependencies = [
+    "tomli-w>=1.2.0",
     "tree-sitter>=0.26.0",
     "tree-sitter-bash>=0.25.1",
     "tree-sitter-ruby>=0.23.1",

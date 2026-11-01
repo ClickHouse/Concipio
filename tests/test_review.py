@@ -205,6 +205,8 @@ def test_a_new_head_carries_the_review(repo, capsys):
     assert nxt["span"]["id"] in old_ids, "a carried span keeps its ID"
     run(capsys, "attach", c["flagged"][0], "C1")
     assert run(capsys, "reviewable", "HEAD~2..HEAD")[0] == 0
+    # The old head still has its old text, so its records still apply there.
+    assert run(capsys, "reviewable", "HEAD~2..HEAD~1")[0] == 0
 
 
 def test_statement_structure_and_kinds(repo, capsys):
@@ -236,3 +238,29 @@ def test_statement_structure_and_kinds(repo, capsys):
     cornerstone = text.split("## Cornerstone")[1].split("\n## ")[0]
     assert cornerstone.index("[D2]") < cornerstone.index("[D3]") < cornerstone.index("[D4]")
     assert "Explains unjustified code" in text
+
+
+def test_regions_sharing_a_scope_keep_their_own_records(repo, capsys):
+    # Top-level shell code around a function forms two hunks that share the
+    # file's scope.
+    (repo / "script.sh").write_text("echo one\necho two\n\nhelper() { :; }\n\necho three\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "script")
+    run(capsys, "review", "init", "HEAD~1..HEAD")
+    script = [s for s in spans.find_spans(repo, "HEAD~1", "HEAD") if s.path == "script.sh"]
+    hunks = [s for s in script if s.kind == "hunk"]
+    assert len(hunks) == 2 and hunks[0].scope == hunks[1].scope
+    _, d = run(capsys, "check")
+    ids = {}
+    for sid in d["uncovered_spans"]:
+        item = run(capsys, "show", sid)[1][0]
+        if item["path"] == "script.sh" and item["kind"] == "hunk":
+            ids[item["start"]] = sid
+    first, last = ids[min(ids)], ids[max(ids)]
+    run(capsys, "concept", "add", "--name", "First", "--claim", first)
+    run(capsys, "concept", "add", "--name", "Second", "--claim", last)
+    run(capsys, "attach", first, "C1")
+    run(capsys, "attach", last, "C2")
+    shown = {sid: [a[1] for a in run(capsys, "show", sid)[1][0]["attachments"]]
+             for sid in (first, last)}
+    assert shown == {first: ["C1"], last: ["C2"]}

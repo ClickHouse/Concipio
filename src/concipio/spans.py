@@ -5,12 +5,14 @@ import subprocess
 from dataclasses import dataclass
 
 import tree_sitter_bash
+import tree_sitter_c
 import tree_sitter_ruby
 from tree_sitter import Language, Parser
 
 LANGUAGES = {
     "ruby": Language(tree_sitter_ruby.language()),
     "bash": Language(tree_sitter_bash.language()),
+    "c": Language(tree_sitter_c.language()),
 }
 RSPEC_SPANS = {"it", "specify", "example", "before", "after", "around",
                "let", "let!", "subject"}
@@ -47,6 +49,8 @@ def file_at(repo, rev, path):
 def language_of(path, text):
     if path.endswith((".rb", ".rake", ".ru", "Gemfile", "Rakefile")):
         return "ruby"
+    if path.endswith((".c", ".h")):
+        return "c"
     if path.endswith((".sh", ".bash")):
         return "bash"
     first = text.split("\n", 1)[0] if text else ""
@@ -81,6 +85,8 @@ def classify(lang, node):
     that names its contents, else None. Kinds that end in "scope" give
     names but are never spans."""
     t = node.type
+    if lang == "c":
+        return classify_c(node)
     if lang == "bash":
         if t == "function_definition":
             return "function", node_text(node.child_by_field_name("name"))
@@ -103,6 +109,32 @@ def classify(lang, node):
     return None
 
 
+def declarator_name(node):
+    """The identifier inside a C declarator, through pointers, arrays, and
+    parameter lists."""
+    while node is not None and node.type not in ("identifier", "field_identifier",
+                                                   "type_identifier"):
+        node = node.child_by_field_name("declarator")
+    return node_text(node)
+
+
+def classify_c(node):
+    t = node.type
+    if t == "function_definition":
+        return "function", declarator_name(node.child_by_field_name("declarator"))
+    if t in ("struct_specifier", "union_specifier", "enum_specifier") and \
+            node.child_by_field_name("body") is not None and \
+            node.parent is not None and node.parent.type in ("translation_unit", "declaration",
+                                                             "type_definition"):
+        word = t.split("_")[0]
+        return word, f"{word} {node_text(node.child_by_field_name('name')) or '(anonymous)'}"
+    if t == "type_definition":
+        return "typedef", declarator_name(node.child_by_field_name("declarator"))
+    if t in ("preproc_def", "preproc_function_def"):
+        return "macro", node_text(node.child_by_field_name("name"))
+    return None
+
+
 def declarations(lang, text):
     """Return a list of (start, end, kind, name, ancestors) for every
     classified node, with 1-based inclusive line numbers."""
@@ -114,8 +146,11 @@ def declarations(lang, text):
         here = ancestors
         if c:
             kind, name = c
-            found.append((node.start_point[0] + 1, node.end_point[0] + 1,
-                          kind, name, ancestors))
+            # A node that ends at column 0, as a #define does by taking its
+            # newline, ends on the line before.
+            end_row, end_col = node.end_point
+            end = end_row + 1 if end_col > 0 or end_row == node.start_point[0] else end_row
+            found.append((node.start_point[0] + 1, end, kind, name, ancestors))
             here = ancestors + [(kind, name)]
         for child in node.children:
             walk(child, here)

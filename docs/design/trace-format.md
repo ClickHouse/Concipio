@@ -95,14 +95,27 @@ overrides a default.
   search for `M14` must find every citation of it, and a range from `M13` to
   `M15` would hide it. Code comments always use full tags, one per citation
   [T6].
+
+## Configurable syntax
+
 - **CPO§T22:** Each role's syntax is a regular expression in `.cpo`, in which
   `${TAG}` stands for any tag. A project may replace the defaults, for
   instance to use an ASCII sign in place of `§`, and may add roles of its own.
   Patterns use Python's syntax, which `grep -P` and `rg -P` also accept for
   ordinary patterns, so a person can run the same search Concipio does.
+- **CPO§T39:** A project whose design already numbers its sections need not
+  retag them. `.cpo` can declare a doc whose numbered headings are
+  definitions, with a prefix, a pattern for its headings, and a pattern for
+  its citations elsewhere, such as `DESIGN.md §6c`. Each heading defines
+  its section, its nesting gives the tree, and the size rule measures it as
+  a section [M41]. A repository that has not adopted Concipio keeps that
+  `.cpo` in the store [T17].
 - **CPO§T34:** Projects that already use Doxygen's `\satisfies` and
   `\verifies`, or StrictDoc's `@relation`, can map those markers to
   Concipio's roles [T22] instead of adding a second set.
+
+## Questions and checks
+
 - **CPO§T23:** Concipio answers the common questions these roles allow, so
   neither agents nor people need to write the searches: which statements lack
   an implementation, which lack a test, and, given coverage data, whether the
@@ -116,6 +129,13 @@ overrides a default.
   children [M20].
 - **CPO§T33:** Every warning is a lint rule with a severity that `.cpo` can
   set, including off.
+- **CPO§T40:** Every limit starts where a project is and moves toward the
+  defaults. `.cpo`'s `[lint]` table sets the statement, section, and
+  breadth limits; `cpo lint --write-baseline` records today's problems, and
+  later runs fail only on problems that are new or worse than recorded. A
+  project can also postpone orphans by listing paths or globs under
+  `postponed`; they are counted in every report but do not fail it, so a
+  project can adopt Concipio before every old doc has a home.
 
 ## Views of code
 

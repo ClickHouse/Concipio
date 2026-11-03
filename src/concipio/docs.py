@@ -27,6 +27,7 @@ class Definition:
     text: str
     name: str
     lines: int = 1
+    heading: bool = False
     parent: str | None = None
     children: list = field(default_factory=list)
     citations: list = field(default_factory=list)
@@ -197,11 +198,106 @@ def find_citations(root, files, defs):
                                 col + len(im.group(0))))
 
 
+HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+
+
+def config_path(root):
+    """Where the project's `.cpo` is: in the repository, or for a repository
+    that has not adopted Concipio, in its store [T17]. Finding it never
+    creates the store."""
+    from .store import data_home, project_id
+    paths = [Path(root) / ".cpo"]
+    try:
+        paths.append(data_home() / "concipio" / project_id(root) / "cpo.toml")
+    except subprocess.CalledProcessError:
+        pass
+    return next((p for p in paths if p.exists()), None)
+
+
+def config(root):
+    import tomllib
+    p = config_path(root)
+    return tomllib.loads(p.read_text()) if p else {}
+
+
+# Implements [CPO§T39]
+def sources(root):
+    """Docs whose numbered headings are definitions, as `.cpo` declares
+    them: each with its prefix, its heading pattern, and the pattern of its
+    citations elsewhere."""
+    out = []
+    for src in config(root).get("source", []):
+        out.append({"doc": src["doc"], "prefix": src["prefix"],
+                    "heading": re.compile(src["heading"]),
+                    "cite": re.compile(src["cite"])})
+    return out
+
+
+def heading_definitions(root, src, defs, errors):
+    path = src["doc"]
+    try:
+        text = (Path(root) / path).read_text(errors="replace")
+    except FileNotFoundError:
+        errors.append(f"{path}, declared in .cpo, does not exist")
+        return
+    raw = text.splitlines()
+    prose = [line for _, line in prose_lines(text)]
+    heads = [(i, len(m[1]), m[2]) for i, line in enumerate(prose) if (m := HEADING.match(line))]
+    stack = []
+    for k, (i, level, title) in enumerate(heads):
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        m = src["heading"].match(raw[i])
+        if not m:
+            continue
+        tag = f"{src['prefix']}§{m['id']}"
+        end = heads[k + 1][0] if k + 1 < len(heads) else len(raw)
+        body = [l for l in raw[i + 1:end] if l.strip()]
+        name = re.sub(r"^#+\s*§?" + re.escape(m["id"]) + r"\.?\s*", "", raw[i]).strip()
+        # Drop the italic notes on dates and status that headings carry,
+        # including ones that wrap onto the next line.
+        name = re.split(r"\s+(?:—\s*)?\*\(|\s+—\s+\*|\s+\(\*", name)[0].strip() or name
+        d = Definition(tag, path, i + 1, " ".join(l.strip() for l in body), name,
+                       lines=len(body), heading=True)
+        if stack:
+            d.parent = stack[-1][1]
+        if tag in defs:
+            errors.append(f"{tag} is defined twice: {defs[tag].path}:{defs[tag].line} "
+                          f"and {path}:{i + 1}")
+        else:
+            defs[tag] = d
+        stack.append((level, tag))
+
+
+def source_citations(root, files, defs, srcs):
+    for path in files:
+        try:
+            text = (Path(root) / path).read_text()
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            for src in srcs:
+                for m in src["cite"].finditer(line):
+                    tag = f"{src['prefix']}§{m['id']}"
+                    if tag in defs:
+                        defs[tag].citations.append(Citation(
+                            path, n, role_before(line, m.start() - 1), line.strip(),
+                            m.start(), m.end()))
+
+
 def load(start=".", root=None, files=None):
     root = root or repo_root(start)
     files = files if files is not None else tracked_files(root)
     defs, errors = find_definitions(root, files)
+    srcs = sources(root)
+    for src in srcs:
+        heading_definitions(root, src, defs, errors)
+    for d in defs.values():
+        if d.parent in defs and d.tag not in defs[d.parent].children:
+            defs[d.parent].children.append(d.tag)
     find_citations(root, files, defs)
+    if srcs:
+        source_citations(root, files, defs, srcs)
     return root, defs, errors
 
 

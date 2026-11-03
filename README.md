@@ -73,6 +73,12 @@ interchangeable for this rule; what matters is that a reader can take in one
 design at a time, then go deeper only where they need to. Docs that define no
 statements, such as notes and reports, are exempt.
 
+- **CPO§M49:** Every design point claims no more code than a reader can
+  hold in mind: by default, 200 lines of implementation, tests counted
+  apart. A point that claims more needs refining into sub-points; a
+  routine longer than that needs extracting into smaller ones, which in
+  hot paths means inline functions, so the rule never costs performance.
+
 **CPO§M2:** Over time, kept concepts should lead a project toward a practice
 nobody has to impose. A master design that reads like a pitch; below it, docs
 at the level of a PRD; below those, docs detailed enough to nearly be code;
@@ -266,9 +272,12 @@ review teaches before any of them is built.
     make a broad doc a choke point that every narrower change has to edit,
     so a doc's children, and the code and tests behind a statement, are
     views Concipio derives rather than lists anyone maintains.
-    - **CPO§M24:** Every design doc cites its parent. Code and docs that
-      cannot reach the master by following citations upward fail the check,
-      just as unreachable code is dead code.
+    - **CPO§M24:** Every doc is reachable from the master by some chain of
+      links or citations, in either direction, just as unreachable code is
+      dead code. Concipio checks that a doc is reachable, not how: a section
+      may list the discussions behind it with a line each, or a doc may cite
+      its parent, as the people and agents maintaining it prefer. Historic
+      docs count too, so each needs a succinct description somewhere.
     - **CPO§M27:** Before creating a concept or design statement, an agent
       searches for an existing one by walking the doc hierarchy down from the
       master. The hierarchy is the index. A vector index may speed the
@@ -418,6 +427,8 @@ first. Each sub-design that touches one must say how it handles it.
    repository that has not adopted Concipio. Its design text is the pull
    request description, and everything Concipio writes stays in the store
    [M39]. The checks must keep holding as the change is rebased.
+   [The sweep's measurements](docs/measurements/2026-10-18-first-sweep.md)
+   record what it cost and what it found.
 2. **Prove it on a kernel module.** A C codebase adopts Concipio in its own
    repository, with
    its existing design as the master. Every line of its C, including the

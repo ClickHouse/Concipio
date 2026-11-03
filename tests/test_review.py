@@ -281,3 +281,29 @@ def test_why_traces_a_line_to_its_design(repo, capsys):
     assert chain["chain"][0]["name"] == "Napping grow"
     assert [st["id"] for st in chain["statements"]] == ["D2", "D1"]
     assert any(m["scope"] == "Grower#keep" for m in chain["mechanism"])
+
+
+def test_c_spans_name_functions_structs_and_macros(tmp_path):
+    r = tmp_path / "c"
+    r.mkdir()
+    git(r, "init", "-q", "-b", "main")
+    git(r, "config", "user.email", "t@example.com")
+    git(r, "config", "user.name", "T")
+    (r / "x.c").write_text("int keep;\n")
+    git(r, "add", ".")
+    git(r, "commit", "-q", "-m", "base")
+    (r / "x.c").write_text(textwrap.dedent("""\
+        int keep;
+        #define SECTORS(b) ((b) >> 9)
+        struct grow { int gib; };
+        typedef unsigned long sector_t;
+        static int *grow_to(struct grow *g, int gib)
+        {
+            g->gib = gib;
+            return 0;
+        }
+        """))
+    git(r, "commit", "-q", "-am", "head")
+    found = {s.scope: s.kind for s in spans.find_spans(r, "HEAD~1", "HEAD")}
+    assert found == {"x.c > SECTORS": "macro", "x.c > struct grow": "struct",
+                     "x.c > sector_t": "typedef", "x.c > grow_to": "function"}

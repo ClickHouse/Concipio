@@ -97,8 +97,8 @@ runs the same on a repository that will never adopt Concipio.
   - **RSpec:** each `it`, and each `before`, `after`, `let`, or `subject`
     block. `describe` and `context` give scope but are never spans.
   - **Shell:** each function; otherwise the hunk.
-  - **C and C++:** each function, each struct, union, or enum definition, and
-    each `#define`.
+  - **C:** each function, each struct, union, or enum definition, each
+    `typedef`, and each `#define`. C++ waits for its grammar.
 
   The list grows as reviews find constructs it handles badly, and each review
   records the version it used.

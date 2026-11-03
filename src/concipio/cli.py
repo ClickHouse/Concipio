@@ -134,8 +134,12 @@ def build_parser():
 
     ln = add("lint", "check that every design fits on a screen")
     ln.add_argument("paths", nargs="*", help="Markdown files or directories (default: the repository)")
-    ln.add_argument("--statement-limit", type=int, default=lint_mod.STATEMENT_LIMIT)
-    ln.add_argument("--section-limit", type=int, default=lint_mod.SECTION_LIMIT)
+    ln.add_argument("--statement-limit", type=int)
+    ln.add_argument("--section-limit", type=int)
+    ln.add_argument("--breadth-limit", type=int, help="0 turns the breadth rule off")
+    ln.add_argument("--write-baseline", action="store_true",
+                    help="record today's problems, so later runs fail only on new or worse ones")
+    ln.add_argument("--all", action="store_true", help="report problems the baseline knows too")
 
     rv = sub.add_parser("review", help="start a review").add_subparsers(dest="sub", required=True)
     init = add("init", "pin a change and list its spans", rv)
@@ -287,18 +291,71 @@ def run_review_command(repo, key, args):
     return 0
 
 
+def lint_limits(repo, args):
+    """Limits from `.cpo`'s [lint] table, overridden by flags [T33]."""
+    cfg = docs.config(repo)
+    table = cfg.get("lint", {})
+    limits = {"statement_limit": table.get("statement_limit", lint_mod.STATEMENT_LIMIT),
+              "section_limit": table.get("section_limit", lint_mod.SECTION_LIMIT),
+              "breadth_limit": table.get("breadth_limit", lint_mod.BREADTH_LIMIT),
+              "master": cfg.get("master", "README.md"),
+              "postponed": [p if isinstance(p, str) else p["path"]
+                            for p in table.get("postponed", [])]}
+    for key in ("statement_limit", "section_limit", "breadth_limit"):
+        if getattr(args, key, None) is not None:
+            limits[key] = getattr(args, key)
+    return limits
+
+
+def baseline_path(repo):
+    where = docs.config_path(repo)
+    if where is not None and where.name == "cpo.toml":
+        return where.parent / "lint-baseline.toml"
+    return Path(repo) / ".cpo-baseline.toml"
+
+
+# Implements [CPO§T40]
 def cmd_lint(args, defs, repo):
+    import tomllib
+
+    import tomli_w
     files = docs.tracked_files(repo)
+    limits = lint_limits(repo, args)
     if args.paths:
         want = [str(Path(p).resolve().relative_to(repo)) for p in args.paths]
-        files = [f for f in files if any(f == w or f.startswith(w.rstrip("/") + "/")
-                                         for w in want)]
-        defs = {t: d for t, d in defs.items() if d.path in files}
-    problems = lint_mod.lint(repo, files, defs, args.statement_limit, args.section_limit)
-    emit([asdict(p) for p in problems],
-         "\n".join(f"{p.path}:{p.line}: {p.rule}: {p.message}" for p in problems)
-         or "Every design fits on a screen.", args.json)
-    return 1 if problems else 0
+        files_in = [f for f in files if any(f == w or f.startswith(w.rstrip("/") + "/")
+                                            for w in want)]
+    else:
+        files_in = files
+    problems, later = lint_mod.check(repo, files, defs, limits)
+    problems = [p for p in problems if p.path in files_in]
+    base_file = baseline_path(repo)
+    if args.write_baseline:
+        base_file.write_text("# Problems known when the baseline was written. cpo lint fails\n"
+                             "# only on problems that are new, or worse than recorded here.\n\n"
+                             + tomli_w.dumps({"problem": [
+                                 {"rule": p.rule, "path": p.path, "key": p.key, "value": p.value}
+                                 for p in problems]}))
+        emit({"baseline": str(base_file), "problems": len(problems)},
+             f"Recorded {len(problems)} problems in {base_file}.", args.json)
+        return 0
+    baseline = (tomllib.loads(base_file.read_text()).get("problem", [])
+                if base_file.exists() else [])
+    fresh = [p for p in problems if not lint_mod.known(p, baseline)]
+    shown = problems if args.all else fresh
+    lines = [f"{p.path}:{p.line}: {p.rule}: {p.message}" for p in shown]
+    if baseline:
+        lines.append(f"{len(problems) - len(fresh)} known problems recorded in the baseline"
+                     + (", shown" if args.all else ", not shown"))
+    if later:
+        lines.append(f"{len(later)} orphans postponed in .cpo")
+    if not problems:
+        lines.insert(0, "Every design fits on a screen, reaches the master, and claims "
+                        "no more code than its limit.")
+    emit({"problems": [asdict(p) for p in shown], "new": len(fresh), "known":
+          len(problems) - len(fresh), "postponed_orphans": later, "limits": limits},
+         "\n".join(lines), args.json)
+    return 1 if fresh else 0
 
 
 def show_mixed(args, defs, repo):

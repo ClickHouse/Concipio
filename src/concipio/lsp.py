@@ -195,6 +195,17 @@ class Server:
         for m in docs.TAG.finditer(line):
             if m.start() <= col <= m.end() and m.group(0) in defs:
                 return "tag", m.group(0)
+        index = self.index_for(path)
+        if not hasattr(index, "sources"):
+            index.sources = docs.sources(index.root)
+        for src in index.sources:
+            for m in src["cite"].finditer(line):
+                tag = f"{src['prefix']}§{m['id']}"
+                if m.start() <= col <= m.end() and tag in defs:
+                    return "tag", tag
+            hm = src["heading"].match(line) if path == index.root / src["doc"] else None
+            if hm and f"{src['prefix']}§{hm['id']}" in defs:
+                return "tag", f"{src['prefix']}§{hm['id']}"
         if path.suffix == ".md":
             for m in docs.SHORT_LIST.finditer(line):
                 for im in re.finditer(docs.ID, m.group(1)):

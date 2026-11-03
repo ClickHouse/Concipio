@@ -290,6 +290,23 @@ def find_citations(root, files, defs):
 
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+# A section number as people write them: 5, 5.2, 5a, 5a‴, 4a-A, after an
+# optional § in the heading itself.
+SECTION_ID = r"\d+(?:\.\d+)*[a-z]?[′″‴]*(?:-[A-Z])?"
+NUMBERED = re.compile(rf"^#{{1,6}}\s+§?(?P<id>{SECTION_ID})\.?\s")
+BARE_SECTION = re.compile(rf"§\s*(?P<id>{SECTION_ID})")
+
+
+# Implements [CPO§T41]
+def numbered_headings(text):
+    """A doc's numbered sections, {number: line}, found in any Markdown doc
+    without configuration."""
+    out = {}
+    for n, line in prose_lines(text):
+        m = NUMBERED.match(line)
+        if m and m["id"] not in out:
+            out[m["id"]] = n
+    return out
 
 
 def config_path(root):
@@ -368,14 +385,25 @@ def source_citations(root, files, defs, srcs):
             text = (Path(root) / path).read_text()
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
-        for n, line in enumerate(text.splitlines(), 1):
+        lines = list(prose_lines(text)) if path.endswith(".md") else \
+            list(enumerate(text.splitlines(), 1))
+        for n, line in lines:
             for src in srcs:
-                for m in src["cite"].finditer(line):
-                    tag = f"{src['prefix']}§{m['id']}"
-                    if tag in defs:
-                        defs[tag].citations.append(Citation(
-                            path, n, role_before(line, m.start() - 1), line.strip(),
-                            m.start(), m.end()))
+                patterns = [src["cite"]]
+                # Inside its own doc, a bare §5c means that doc's §5c.
+                if path == src["doc"]:
+                    if src["heading"].match(line):
+                        continue  # a heading defines its section, not cites it
+                    patterns.append(BARE_SECTION)
+                seen = set()
+                for pattern in patterns:
+                    for m in pattern.finditer(line):
+                        tag = f"{src['prefix']}§{m['id']}"
+                        if tag in defs and m.end() not in seen:
+                            seen.add(m.end())
+                            defs[tag].citations.append(Citation(
+                                path, n, role_before(line, m.start() - 1), line.strip(),
+                                m.start(), m.end()))
 
 
 def load(start=".", root=None, files=None):

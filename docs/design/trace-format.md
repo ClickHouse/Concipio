@@ -110,6 +110,13 @@ overrides a default.
   its section, its nesting gives the tree, and the size rule measures it as
   a section [M41]. A repository that has not adopted Concipio keeps that
   `.cpo` in the store [T17].
+- **CPO§T41:** A bare section number, `§5c`, means section 5c of the doc it
+  is written in, or of the doc linked just before it, as in
+  "[the answers](answers.md), §5". Concipio finds any doc's numbered
+  headings without configuration, so editors can follow such references
+  in every doc. In a doc that defines tags by its numbered headings
+  [T39], a resolved bare number is also a citation of the tag; elsewhere
+  it is navigation only, since it names no tag.
 - **CPO§T34:** Projects that already use Doxygen's `\satisfies` and
   `\verifies`, or StrictDoc's `@relation`, can map those markers to
   Concipio's roles [T22] instead of adding a second set.

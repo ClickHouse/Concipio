@@ -40,14 +40,16 @@ def test_numbered_headings_can_be_definitions(tmp_path):
         "heading = '^#{2,4}\\s+§?(?P<id>\\d+[a-z]?[′″]*)\\.?\\s'\n"
         "cite = 'DESIGN(?:\\.md)?\\s*§\\s*(?P<id>\\d+[a-z]?[′″]*)'\n")
     (tmp_path / "DESIGN.md").write_text(
-        "# Design\n\n## 1. Scope\n\nWhat it covers.\n\n### 1a. Limits *(Josh, 2026-08-04)*\n\n"
+        "# Design\n\n## 1. Scope\n\nWhat it covers; see §1a.\n\n### 1a. Limits *(Josh, 2026-08-04)*\n\n"
         + "detail\n" * 5)
-    (tmp_path / "x.c").write_text("/* See DESIGN.md §1a. */\nint x;\n")
+    (tmp_path / "x.c").write_text("/* See DESIGN.md §1a; not §1. */\nint x;\n")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     _, defs, errors = docs.load(root=tmp_path)
     assert errors == []
     assert defs["DESIGN§1a"].parent == "DESIGN§1" and defs["DESIGN§1a"].name == "Limits"
-    assert [(c.path, c.line) for c in defs["DESIGN§1a"].citations] == [("x.c", 1)]
+    assert sorted((c.path, c.line) for c in defs["DESIGN§1a"].citations) == [
+        ("DESIGN.md", 5), ("x.c", 1)], "a bare §1a counts inside DESIGN.md only"
+    assert defs["DESIGN§1"].citations == [], "x.c's bare §1 is not a citation"
     files = docs.tracked_files(tmp_path)
     assert [p.rule for p in lint.lint(Path(tmp_path), files, defs, section_limit=4)] == [
         "section-length"]

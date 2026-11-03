@@ -49,10 +49,26 @@ class Index:
         self.files = files
         self.defs = None
 
+    def stamp(self, files):
+        """What the index was built from: the docs' and .cpo's modification
+        times, so a change made outside the editor, such as a checkout, is
+        noticed on the next request."""
+        out = []
+        for f in [*files, ".cpo"]:
+            if f.endswith(".md") or f == ".cpo":
+                try:
+                    out.append((f, (self.root / f).stat().st_mtime_ns))
+                except FileNotFoundError:
+                    pass
+        return tuple(out)
+
     def get(self):
-        if self.defs is None:
-            files = self.files if self.files is not None else docs.tracked_files(self.root)
+        files = self.files if self.files is not None else docs.tracked_files(self.root)
+        now = self.stamp(files)
+        if self.defs is None or now != getattr(self, "built_from", None):
             _, self.defs, _ = docs.load(root=self.root, files=files)
+            self.built_from = now
+            self.sources = docs.sources(self.root)
         return self.defs
 
 
@@ -182,9 +198,51 @@ class Server:
             return self.buffers[uri]
         return from_uri(uri).read_text(errors="replace")
 
+    def link_at(self, path, lines, line, col):
+        """The target of a Markdown link under the cursor: an inline link,
+        or a reference link with its definition elsewhere in the file. Return
+        (path, fragment) or None."""
+        targets = []
+        for m in re.finditer(r"\[([^\]]*)\]\(\s*<?([^)>\s]+)>?[^)]*\)", line):
+            targets.append((m.start(), m.end(), m.group(2)))
+        refs = {}
+        for l in lines:
+            d = re.match(r"^\s{0,3}\[([^\]]+)\]:\s*<?([^>\s]+)>?", l)
+            if d:
+                refs[d.group(1).lower()] = d.group(2)
+        for m in re.finditer(r"\[([^\]]+)\](?:\[([^\]]*)\])?(?![(:])", line):
+            key = (m.group(2) or m.group(1)).lower()
+            if key in refs:
+                targets.append((m.start(), m.end(), refs[key]))
+        for start, end, target in targets:
+            if start <= col <= end and not re.match(r"^[a-z]+:", target):
+                file, _, frag = target.partition("#")
+                full = (path.parent / file).resolve() if file else path
+                return full, frag
+        return None
+
+    def heading_line(self, path, fragment):
+        """The line of the heading whose GitHub-style anchor is fragment, or
+        the line a section number resolved to."""
+        if isinstance(fragment, tuple):
+            return fragment[1]
+        if not fragment:
+            return 1
+        try:
+            text = path.read_text(errors="replace")
+        except (FileNotFoundError, IsADirectoryError):
+            return 1
+        for n, l in enumerate(text.splitlines(), 1):
+            m = HEADING.match(l)
+            if m:
+                anchor = re.sub(r"[^\w\- ]", "", m.group(2).strip().lower()).replace(" ", "-")
+                if anchor == fragment.lower():
+                    return n
+        return 1
+
     def word_at(self, uri, position):
-        """Return ("tag", tag) or ("span", id) for the token under the
-        cursor, or None."""
+        """Return ("tag", tag), ("span", id), or ("link", (path, fragment))
+        for the token under the cursor, or None."""
         path = from_uri(uri)
         lines = self.text(uri).splitlines()
         if position["line"] >= len(lines):
@@ -196,13 +254,15 @@ class Server:
             if m.start() <= col <= m.end() and m.group(0) in defs:
                 return "tag", m.group(0)
         index = self.index_for(path)
-        if not hasattr(index, "sources"):
-            index.sources = docs.sources(index.root)
-        for src in index.sources:
-            for m in src["cite"].finditer(line):
-                tag = f"{src['prefix']}§{m['id']}"
-                if m.start() <= col <= m.end() and tag in defs:
-                    return "tag", tag
+        for src in getattr(index, "sources", []):
+            patterns = [src["cite"]]
+            if path == index.root / src["doc"]:
+                patterns.append(docs.BARE_SECTION)
+            for pattern in patterns:
+                for m in pattern.finditer(line):
+                    tag = f"{src['prefix']}§{m['id']}"
+                    if m.start() <= col <= m.end() and tag in defs:
+                        return "tag", tag
             hm = src["heading"].match(line) if path == index.root / src["doc"] else None
             if hm and f"{src['prefix']}§{hm['id']}" in defs:
                 return "tag", f"{src['prefix']}§{hm['id']}"
@@ -220,6 +280,31 @@ class Server:
         for m in SPAN_ID.finditer(line):
             if m.start() <= col <= m.end() and self.review_for(path):
                 return "span", m.group(0)
+        if path.suffix == ".md":
+            link = self.link_at(path, lines, line, col)
+            if link:
+                return "link", link
+            section = self.section_at(path, lines, line, col)
+            if section:
+                return "link", section
+        return None
+
+    def section_at(self, path, lines, line, col):
+        """A bare §5c under the cursor: a section of the doc linked just
+        before it, as in "[the answers](answers.md), §5", or else of the doc
+        it is in [T41]."""
+        for m in docs.BARE_SECTION.finditer(line):
+            if not m.start() <= col <= m.end():
+                continue
+            before = line[:m.start()]
+            linked = re.search(r"\]\(\s*<?([^)>\s#]+\.md)[^)]*\)[\s,]*$", before)
+            target = (path.parent / linked.group(1)).resolve() if linked else path
+            try:
+                heads = docs.numbered_headings(target.read_text(errors="replace"))
+            except (FileNotFoundError, IsADirectoryError):
+                return None
+            if m["id"] in heads:
+                return target, ("#line", heads[m["id"]])
         return None
 
     def review_for(self, path):
@@ -253,6 +338,11 @@ class Server:
         if not word:
             return None
         path = from_uri(uri)
+        # Implements [CPO§M43]
+        if word[0] == "link":
+            target, fragment = word[1]
+            return self.location(target, self.heading_line(target, fragment)) \
+                if target.exists() else None
         if word[0] == "span":
             manifest, spans = self.review_for(path)
             s = spans.get(word[1])
@@ -283,7 +373,16 @@ class Server:
         if not word:
             return None
         path = from_uri(uri)
-        if word[0] == "span":
+        if word[0] == "link":
+            target, fragment = word[1]
+            if not target.exists() or target.is_dir():
+                return None
+            head = target.read_text(errors="replace").splitlines()
+            title = next((l.lstrip("# ").strip() for l in head if l.startswith("#")), target.name)
+            n = self.heading_line(target, fragment)
+            at = f" § {head[n - 1].lstrip('# ').strip()}" if fragment and n > 1 else ""
+            value = f"**{title}**{at}\n\n`{target.name}`"
+        elif word[0] == "span":
             _, spans = self.review_for(path)
             s = spans.get(word[1])
             if not s:

@@ -51,8 +51,8 @@ overrides a default.
   needing history, so a shallow clone can tell a retired ID from a new one
   [T5].
 - **CPO§T20:** Tags inside Markdown code, whether blocks or inline spans,
-  are examples. Concipio parses Markdown, and source comments, before it looks
-  for tags.
+  are examples, except in a block tagged `cpo`, which holds data [F14].
+  Concipio parses Markdown, and source comments, before it looks for tags.
 - **CPO§T29:** Concipio warns about a statement that no code implements,
   unless the statement is marked planned or descriptive [M5]. Mentions in
   other docs do not silence the warning.

@@ -110,3 +110,73 @@ def test_breadth_counts_the_code_a_point_claims(tmp_path):
     assert b == {"implementation": 34, "tests": 1, "regions": 2}
     status, d = run_lint(tmp_path, "--breadth-limit", "20")
     assert [p["rule"] for p in d["problems"]] == ["breadth"]
+
+
+def test_path_walks_from_the_master_to_a_tag(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](docs/design.md).\n",
+        "docs/design.md": "# Design\n\n- **X§1:** Outer.\n  - **X§2:** Inner.\n",
+    })
+    from concipio import docs as d_, lint as l_
+    _, defs, _ = d_.load(root=tmp_path)
+    chain, inner = l_.path_to(tmp_path, d_.tracked_files(tmp_path), defs, "X§2")
+    assert chain == ["README.md", "docs/design.md"] and inner == ["X§1", "X§2"]
+    assert l_.path_to(tmp_path, d_.tracked_files(tmp_path), defs, "nowhere.md") is None
+
+
+def test_fields_schemas_importance_and_freshness(tmp_path):
+    import os, subprocess
+    cpo = (
+        '[fields]\nknown = ["Owner", "Status"]\n\n'
+        '[brief]\nactive = { field = "Status", values = ["active"] }\n\n'
+        '[[schema]]\nunder = "X§1"\nrequire = ["Owner"]\n'
+        '[schema.fields]\nPriority = { enum = ["high", "low"] }\n')
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** Roadmap. See [deep](a.md).\n"
+                     "  - **X§2:** Grow online. {Owner=Ann Priority=urgent Status=active}\n"
+                     "  - **X§3:** Shrink. {owner=Ann}\n",
+        "a.md": "Links on to [b](b.md).\n",
+        "b.md": "And to [c](c.md).\n",
+        "c.md": "- **X§4:** Writes may be reordered. {Importance=critical}\n",
+    }, cpo)
+    env = dict(os.environ, GIT_AUTHOR_DATE="2026-01-02T00:00:00", GIT_COMMITTER_DATE="2026-01-02T00:00:00")
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "docs"],
+                   cwd=tmp_path, check=True, env=env)
+    (tmp_path / "a.md").write_text("Links on to [b](b.md).\n\n- **X§5:** Updated claim. {Updated=2025-12-01}\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "more"],
+                   cwd=tmp_path, check=True, env=env)
+    _, d = run_lint(tmp_path)
+    rules = sorted((p["rule"], p["key"]) for p in d["problems"])
+    assert ("schema", "X§2:Priority") in rules, "urgent is not in the enum"
+    assert ("schema", "X§3:fields") in rules, "Owner is required, owner is a typo"
+    assert ("undeclared-field", "X§3:owner") in rules
+    assert ("buried", "X§4") in rules, "critical, but three links deep"
+    assert ("stale-updated", "X§5") in rules, "changed in 2026, claims 2025-12-01"
+    from concipio import cli
+    import contextlib, io, json
+    old = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["list", "--json", "--where", "Owner=Ann"])
+        assert [r["tag"] for r in json.loads(out.getvalue())] == ["X§2"]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["brief", "--json"])
+        brief = json.loads(out.getvalue())
+        assert [c["tag"] for c in brief["critical"]] == ["X§4"]
+        assert [a["tag"] for a in brief["active"]] == ["X§2"]
+    finally:
+        os.chdir(old)
+
+
+def test_fields_are_not_read_from_code_or_sets():
+    from concipio.docs import attribute_fields, statement_fields
+    assert attribute_fields("Record `{seq_mark = tail}` and return.")[0] == {}
+    assert attribute_fields("at {N=32, N=1} x {B=1, B=2} under load")[0] == {}
+    assert attribute_fields('Ship it. {Owner="Ann, Bo" Due=2026-12-01}')[0] == {
+        "Owner": "Ann, Bo", "Due": "2026-12-01"}
+    fields, _ = statement_fields(["- **X§1:** A.", "  ```toml", "  {Owner=Nope}", "  ```"])
+    assert fields == {}

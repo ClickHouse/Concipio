@@ -456,6 +456,9 @@ This list is for readers; under [M20], Concipio will generate it.
 
 - [Review mode](docs/design/review-mode.md): manifest, spans, concept graph,
   commands, and verdicts [M9, M10, M11, M12, M21, M22, M28, M31, M32, M37, M38, M39, M40, R11]
+- [Fields, importance, and briefs](docs/design/fields.md): project
+  structure as fields on statements, schemas, and what agents must never
+  lose [M24, M47]
 - [The store](docs/design/store.md), a design for keying review decisions
   to code rather than to reviews [M28, R3, R6]
 - [Trace format](docs/design/trace-format.md), a draft for traceability

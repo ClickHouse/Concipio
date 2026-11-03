@@ -28,6 +28,7 @@ class Definition:
     name: str
     lines: int = 1
     heading: bool = False
+    fields: dict = field(default_factory=dict)
     parent: str | None = None
     children: list = field(default_factory=list)
     citations: list = field(default_factory=list)
@@ -79,6 +80,88 @@ def prose_lines(text):
 
 
 # Implements [CPO§T4]
+ATTR_LIST = re.compile(r"\{(:?[^{}\n]*)\}")
+CPO_FENCE = re.compile(r"^\s*(```|~~~)cpo\s*$")
+
+
+# Implements [CPO§F1]
+def attribute_fields(line):
+    """The key=value pairs of the Markdown attribute lists on a line, as
+    Pandoc, kramdown, and Python-Markdown write them: `{Owner=Josh}` or
+    `{: Owner="Josh V" Updated=2026-11-03}`. Braces that do not parse
+    wholly as an attribute list are prose, and are left alone. Return the
+    fields and the line with its attribute lists removed."""
+    from markdown.extensions.attr_list import get_attrs_and_remainder
+    found = {}
+    kept = line
+    # Fields are never read from inline code [T20].
+    visible = re.sub(r"`[^`]*`", lambda c: " " * len(c.group(0)), line)
+    for m in ATTR_LIST.finditer(visible):
+        body = m.group(1).lstrip(":").strip()
+        # Attribute lists separate pairs with spaces; a comma outside quotes
+        # means prose, such as the set {N=32, N=1}.
+        if "," in re.sub(r'"[^"]*"|\'[^\']*\'', "", body):
+            continue
+        pairs, rest = get_attrs_and_remainder(body)
+        if rest.strip() or not pairs:
+            continue
+        fields, words = {}, False
+        for k, v in pairs:
+            if re.search(rf"(?<![\w.#-]){re.escape(k)}\s*=", body):
+                fields[k] = v
+            elif k == "." or f"#{k}" in body:
+                continue  # a class or an id, which attribute lists also carry
+            else:
+                words = True
+        if words or not fields:
+            continue
+        found.update(fields)
+        kept = kept.replace(line[m.start():m.end()], "", 1)
+    return found, kept
+
+
+def pattern_fields(pattern, line):
+    """A project's own field syntax, as a pattern with `key` and `value`
+    groups [F13]."""
+    found = {m["key"]: m["value"].strip() for m in pattern.finditer(line)}
+    return found, pattern.sub("", line) if found else line
+
+
+def statement_fields(lines, pattern=None):
+    """The fields of a statement's lines: inline fields, and TOML in fenced
+    blocks tagged `cpo` [F14]. Return the fields and the lines without
+    them."""
+    import tomllib
+    fields, kept, block, other = {}, [], None, None
+    for line in lines:
+        if block is not None:
+            if line.strip().startswith(("```", "~~~")):
+                try:
+                    fields.update(tomllib.loads("\n".join(block)))
+                except tomllib.TOMLDecodeError as e:
+                    fields.setdefault("__errors__", []).append(f"cpo block: {e}")
+                block = None
+            else:
+                block.append(line.strip())
+            continue
+        if CPO_FENCE.match(line):
+            block = []
+            continue
+        if other is not None:
+            if line.strip().startswith(other):
+                other = None
+            kept.append(line)
+            continue
+        if line.strip().startswith(("```", "~~~")):
+            other = line.strip()[:3]  # an ordinary code block: an example
+            kept.append(line)
+            continue
+        found, line = pattern_fields(pattern, line) if pattern else attribute_fields(line)
+        fields.update(found)
+        kept.append(line)
+    return fields, kept
+
+
 def statement_extent(lines, start, indent, is_item):
     """Return the lines of the statement that begins at index `start`: its
     paragraph, or its list item up to the first nested definition, which
@@ -113,7 +196,14 @@ def statement_name(rest, text):
     return sentence if len(sentence) <= 90 else sentence[:87].rstrip() + "..."
 
 
-def find_definitions(root, files):
+def field_pattern(root):
+    """A project's own field syntax from `.cpo`, or None for attribute
+    lists [F13]."""
+    pattern = config(root).get("fields", {}).get("pattern")
+    return re.compile(pattern) if pattern else None
+
+
+def find_definitions(root, files, pattern=None):
     defs = {}
     errors = []
     for path in files:
@@ -130,13 +220,14 @@ def find_definitions(root, files):
                 continue
             tag = f"{m['prefix']}§{m['id']}"
             body = statement_extent(raw, i, len(m["indent"]), bool(m["marker"]))
-            text = " ".join(l.strip() for l in body if l.strip())
+            fields, kept = statement_fields(body, pattern)
+            text = " ".join(l.strip() for l in kept if l.strip())
             text = re.sub(r"^(?:[-*]|\d+\.)\s+", "", text)
-            after_tag = DEFINITION.match(raw[i])
+            after_tag = DEFINITION.match(kept[0] if kept else raw[i])
             rest = after_tag["rest"] if after_tag else m["rest"]
             text = re.sub(r"^\*\*[^*]+\*\*:?\s*", "", text)
             d = Definition(tag, path, i + 1, text, statement_name(rest, text),
-                           lines=len(body))
+                           lines=len(body), fields=fields)
             # Implements [CPO§T38]
             indent = len(m["indent"])
             while open_items and open_items[-1][0] >= indent:
@@ -233,7 +324,7 @@ def sources(root):
     return out
 
 
-def heading_definitions(root, src, defs, errors):
+def heading_definitions(root, src, defs, errors, pattern=None):
     path = src["doc"]
     try:
         text = (Path(root) / path).read_text(errors="replace")
@@ -252,13 +343,15 @@ def heading_definitions(root, src, defs, errors):
             continue
         tag = f"{src['prefix']}§{m['id']}"
         end = heads[k + 1][0] if k + 1 < len(heads) else len(raw)
-        body = [l for l in raw[i + 1:end] if l.strip()]
-        name = re.sub(r"^#+\s*§?" + re.escape(m["id"]) + r"\.?\s*", "", raw[i]).strip()
+        fields, kept = statement_fields(raw[i:end], pattern)
+        heading_line = kept[0] if kept else raw[i]
+        body = [l for l in kept[1:] if l.strip()]
+        name = re.sub(r"^#+\s*§?" + re.escape(m["id"]) + r"\.?\s*", "", heading_line).strip()
         # Drop the italic notes on dates and status that headings carry,
         # including ones that wrap onto the next line.
         name = re.split(r"\s+(?:—\s*)?\*\(|\s+—\s+\*|\s+\(\*", name)[0].strip() or name
         d = Definition(tag, path, i + 1, " ".join(l.strip() for l in body), name,
-                       lines=len(body), heading=True)
+                       lines=len(body), heading=True, fields=fields)
         if stack:
             d.parent = stack[-1][1]
         if tag in defs:
@@ -288,10 +381,11 @@ def source_citations(root, files, defs, srcs):
 def load(start=".", root=None, files=None):
     root = root or repo_root(start)
     files = files if files is not None else tracked_files(root)
-    defs, errors = find_definitions(root, files)
+    pattern = field_pattern(root)
+    defs, errors = find_definitions(root, files, pattern)
     srcs = sources(root)
     for src in srcs:
-        heading_definitions(root, src, defs, errors)
+        heading_definitions(root, src, defs, errors, pattern)
     for d in defs.values():
         if d.parent in defs and d.tag not in defs[d.parent].children:
             defs[d.parent].children.append(d.tag)

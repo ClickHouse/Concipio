@@ -60,8 +60,18 @@ def cmd_show(args, defs):
     return 1 if missing else 0
 
 
+# Implements [CPO§F7]
+def matches_where(d, wheres):
+    for w in wheres or []:
+        key, _, value = w.partition("=")
+        if str(d.fields.get(key)) != value:
+            return False
+    return True
+
+
 def cmd_list(args, defs):
     want = args.namespaces
+    defs = {t: d for t, d in defs.items() if matches_where(d, getattr(args, "where", None))}
     rows = [defs[t] for t in sorted(defs, key=docs.sort_key)
             if (d := defs[t])
             and (not want or any(d.tag.split("§")[1].startswith(w) or
@@ -129,6 +139,11 @@ def build_parser():
     show.add_argument("tags", nargs="+", help="tags, IDs, or lists such as '[M3, R4]'")
     lst = add("list", "list defined tags with their names")
     lst.add_argument("namespaces", nargs="*", help="limit to these namespaces, such as M or R")
+    lst.add_argument("--where", action="append", metavar="KEY=VALUE",
+                     help="only statements whose field has this value")
+    add("brief", "print what no agent or person may lose: critical statements and active work")
+    pa = add("path", "show the chain of links from the master to a doc or tag")
+    pa.add_argument("target", help="a doc's path, a tag, or an ID")
     tree = add("tree", "show how statements refine one another")
     tree.add_argument("tags", nargs="*", help="roots to start from (default: all)")
 
@@ -262,7 +277,11 @@ def dispatch(args):
 
     for e in errors:
         print(f"cpo: {e}", file=sys.stderr)
-    if args.command == "lint":
+    if args.command == "path":
+        status = cmd_path(args, defs, repo)
+    elif args.command == "brief":
+        status = cmd_brief(args, defs, repo)
+    elif args.command == "lint":
         status = cmd_lint(args, defs, repo)
     elif args.command == "show":
         status = show_mixed(args, defs, repo)
@@ -288,6 +307,77 @@ def run_review_command(repo, key, args):
     emit(data, human, args.json)
     if args.command == "check":
         return 0 if data["traced"] and data["explained"] else 1
+    return 0
+
+
+# Implements [CPO§F11]
+def cmd_brief(args, defs, repo):
+    import datetime
+    cfg = docs.config(repo)
+    s = lint_mod.field_settings(cfg)
+    active = cfg.get("brief", {}).get("active", {})
+    today = datetime.date.today()
+    critical = [d for t, d in sorted(defs.items(), key=lambda kv: docs.sort_key(kv[0]))
+                if d.fields.get(s["importance"]) in s["critical"]]
+    working = [d for t, d in sorted(defs.items(), key=lambda kv: docs.sort_key(kv[0]))
+               if active and str(d.fields.get(active.get("field"))) in active.get("values", [])]
+
+    def stale(d):
+        stamp = d.fields.get(s["updated"])
+        try:
+            age = (today - datetime.date.fromisoformat(str(stamp))).days
+        except ValueError:
+            return None
+        return age if age > s["stale_after_days"] else None
+
+    def short(text, n=160):
+        return text if len(text) <= n else text[:n - 3].rstrip() + "..."
+
+    lines = []
+    if critical:
+        lines.append("Critical:")
+        lines += [f"  {d.tag} {d.name} ({d.path}:{d.line})" + (
+            "" if short(d.text).startswith(d.name.rstrip('.')) else f"\n    {short(d.text)}")
+            for d in critical]
+    if working:
+        lines.append("Active:")
+        for d in working:
+            extra = ", ".join(f"{k}={v}" for k, v in d.fields.items()
+                              if k not in (active.get("field"), s["importance"]))
+            flag = f"  [no update in {stale(d)} days]" if stale(d) else ""
+            lines.append(f"  {d.tag} {d.name}" + (f" ({extra})" if extra else "") + flag)
+    if not lines:
+        lines.append("Nothing is marked critical or active.")
+    emit({"critical": [{"tag": d.tag, "name": d.name, "text": d.text, "path": d.path,
+                        "line": d.line, "fields": d.fields} for d in critical],
+          "active": [{"tag": d.tag, "name": d.name, "fields": d.fields,
+                      "stale_days": stale(d)} for d in working]},
+         "\n".join(lines), args.json)
+    return 0
+
+
+def cmd_path(args, defs, repo):
+    target = args.target
+    if target not in defs:
+        tags = docs.resolve(target, defs)
+        if len(tags) == 1:
+            target = tags[0]
+        elif tags:
+            print(f"cpo: {target} is ambiguous: {', '.join(sorted(tags))}", file=sys.stderr)
+            return 1
+        else:
+            full = (Path.cwd() / target).resolve()
+            target = str(full.relative_to(repo)) if full.is_relative_to(repo) else target
+    limits = lint_limits(repo, args)
+    found = lint_mod.path_to(repo, docs.tracked_files(repo), defs, target, limits["master"])
+    if found is None:
+        print(f"cpo: {args.target} is not reachable from {limits['master']}", file=sys.stderr)
+        return 1
+    chain, inner = found
+    lines = [f"{'  ' * i}{doc}" for i, doc in enumerate(chain)]
+    lines += [f"{'  ' * (len(chain) + i)}{t}  {defs[t].name}" for i, t in enumerate(inner)]
+    emit({"docs": chain, "statements": inner, "depth": len(chain) - 1},
+         "\n".join(lines), args.json)
     return 0
 
 
@@ -327,7 +417,7 @@ def cmd_lint(args, defs, repo):
                                             for w in want)]
     else:
         files_in = files
-    problems, later = lint_mod.check(repo, files, defs, limits)
+    problems, later = lint_mod.check(repo, files, defs, limits, docs.config(repo))
     problems = [p for p in problems if p.path in files_in]
     base_file = baseline_path(repo)
     if args.write_baseline:

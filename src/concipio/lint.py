@@ -87,11 +87,8 @@ def links_of(path, text):
     return out
 
 
-# Implements [CPO§M24]
-def orphans(root, files, defs, master="README.md", postponed=()):
-    """Docs no chain of links reaches from the master, following Markdown
-    links between docs and citations of tags, in either direction. Return
-    (orphans, postponed orphans)."""
+def doc_graph(root, files, defs):
+    """Docs joined by Markdown links and tag citations, either way."""
     md = [f for f in files if f.endswith(".md")]
     known = set(md)
     edges = {f: set() for f in md}
@@ -114,12 +111,53 @@ def orphans(root, files, defs, master="README.md", postponed=()):
     for d in defs.values():
         for c in d.citations:
             join(c.path, d.path)
-    seen, todo = {master}, [master]
-    while todo:
-        for g in edges.get(todo.pop(), ()):
-            if g not in seen:
-                seen.add(g)
-                todo.append(g)
+    return md, edges
+
+
+def paths_from(master, edges):
+    """For every reachable doc, the doc it was first reached from, by a
+    breadth-first walk, so following them back gives a shortest path."""
+    came = {master: None}
+    queue = [master]
+    while queue:
+        here = queue.pop(0)
+        for g in sorted(edges.get(here, ())):
+            if g not in came:
+                came[g] = here
+                queue.append(g)
+    return came
+
+
+# Implements [CPO§F9]
+def path_to(root, files, defs, target, master="README.md"):
+    """The shortest chain of docs from the master to a doc, then, for a
+    tag, the chain of statements within that doc down to the tag."""
+    _, edges = doc_graph(root, files, defs)
+    came = paths_from(master, edges)
+    doc = defs[target].path if target in defs else target
+    if doc not in came:
+        return None
+    chain = []
+    node = doc
+    while node is not None:
+        chain.append(node)
+        node = came[node]
+    chain.reverse()
+    inner = []
+    node = target if target in defs else None
+    while node in defs:
+        inner.append(node)
+        node = defs[node].parent
+    return chain, list(reversed(inner))
+
+
+# Implements [CPO§M24]
+def orphans(root, files, defs, master="README.md", postponed=()):
+    """Docs no chain of links reaches from the master, following Markdown
+    links between docs and citations of tags, in either direction. Return
+    (orphans, postponed orphans)."""
+    md, edges = doc_graph(root, files, defs)
+    seen = set(paths_from(master, edges))
     lost = sorted(f for f in md if f not in seen)
     later = [f for f in lost if any(fnmatch.fnmatch(f, p) for p in postponed)]
     return [f for f in lost if f not in later], later
@@ -168,9 +206,10 @@ def breadth(root, defs):
     return out
 
 
-def check(root, files, defs, limits):
+def check(root, files, defs, limits, cfg=None):
     """Every rule, with limits from `.cpo` [T33]."""
     problems = lint(root, files, defs, limits["statement_limit"], limits["section_limit"])
+    problems += field_problems(root, files, defs, cfg or {}, limits["master"])
     lost, later = orphans(root, files, defs, limits["master"], limits["postponed"])
     for f in lost:
         problems.append(Problem(f, 1, "orphan",
@@ -195,3 +234,106 @@ def known(problem, baseline):
         if (b["rule"], b["path"], b["key"]) == (problem.rule, problem.path, problem.key):
             return problem.value <= b["value"]
     return False
+
+
+FIELD_DEFAULTS = {"importance": "Importance", "critical": ["critical"], "critical_depth": 2,
+                  "updated": "Updated", "stale_after_days": 21, "known": []}
+
+
+def field_settings(cfg):
+    out = dict(FIELD_DEFAULTS, **cfg.get("fields", {}))
+    out["schemas"] = cfg.get("schema", [])
+    return out
+
+
+def schema_applies(schema, d, defs):
+    """A schema covers the statements nested under its `under` tag, or the
+    statements of docs matching its `docs` glob [F5]."""
+    if "docs" in schema and fnmatch.fnmatch(d.path, schema["docs"]):
+        return True
+    node = d.parent
+    while node in defs:
+        if node == schema.get("under"):
+            return True
+        node = defs[node].parent
+    return False
+
+
+# Implements [CPO§F6]
+def field_problems(root, files, defs, cfg, master):
+    import jsonschema
+    s = field_settings(cfg)
+    known = set(s["known"])
+    for schema in s["schemas"]:
+        known.update(schema.get("require", []))
+        known.update(schema.get("fields", {}))
+    if s["known"] or s["schemas"]:
+        known.update([s["importance"], s["updated"]])
+    problems = []
+    for d in defs.values():
+        for e in d.fields.pop("__errors__", []) if "__errors__" in d.fields else []:
+            problems.append(Problem(d.path, d.line, "field-syntax", f"{d.tag}: {e}", d.tag, 1))
+        if known:
+            for key in d.fields:
+                if key not in known:
+                    near = [k for k in known if k.lower() == key.lower()]
+                    hint = f"; did you mean {near[0]}?" if near else ""
+                    problems.append(Problem(d.path, d.line, "undeclared-field",
+                                            f"{d.tag} has a field {key} that no schema "
+                                            f"declares{hint}", f"{d.tag}:{key}", 1))
+        for schema in s["schemas"]:
+            if not schema_applies(schema, d, defs):
+                continue
+            spec = {"type": "object", "required": schema.get("require", []),
+                    "properties": schema.get("fields", {})}
+            for err in jsonschema.Draft202012Validator(spec).iter_errors(d.fields):
+                where = "/".join(str(p) for p in err.path) or "fields"
+                problems.append(Problem(d.path, d.line, "schema",
+                                        f"{d.tag} ({d.name}): {where}: {err.message}",
+                                        f"{d.tag}:{where}", 1))
+    # Implements [CPO§F10]
+    critical = [d for d in defs.values() if d.fields.get(s["importance"]) in s["critical"]]
+    if critical:
+        _, edges = doc_graph(root, files, defs)
+        came = paths_from(master, edges)
+        for d in critical:
+            depth = 0
+            node = d.path
+            if node not in came:
+                depth = None
+            else:
+                while came[node] is not None:
+                    depth += 1
+                    node = came[node]
+            if depth is None or depth > s["critical_depth"]:
+                how = "unreachable" if depth is None else f"{depth} links from {master}"
+                problems.append(Problem(d.path, d.line, "buried",
+                                        f"{d.tag} ({d.name}) is critical but {how}; keep it "
+                                        f"within {s['critical_depth']}", d.tag, depth or 99))
+    # Implements [CPO§F15]
+    for d in defs.values():
+        stamp = d.fields.get(s["updated"])
+        if not stamp:
+            continue
+        last = last_changed(root, d)
+        if last and last > str(stamp):
+            problems.append(Problem(d.path, d.line, "stale-updated",
+                                    f"{d.tag} ({d.name}) says {s['updated']}={stamp}, but its "
+                                    f"text changed on {last}", d.tag, 1))
+    return problems
+
+
+def last_changed(root, d):
+    """The date the statement's lines last changed, by git blame, or today
+    if any of them are not yet committed."""
+    import datetime
+    import subprocess
+    end = d.line + max(d.lines, 1) - 1
+    out = subprocess.run(["git", "blame", "--porcelain", "-L", f"{d.line},{end}", "--", d.path],
+                         cwd=root, capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    times = [int(l.split()[1]) for l in out.stdout.splitlines() if l.startswith("author-time ")]
+    if "0000000000000000000000000000000000000000" in out.stdout:
+        return datetime.date.today().isoformat()
+    return datetime.date.fromtimestamp(max(times)).isoformat() if times else None

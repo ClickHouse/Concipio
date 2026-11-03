@@ -142,6 +142,16 @@ def build_parser():
     lst.add_argument("--where", action="append", metavar="KEY=VALUE",
                      help="only statements whose field has this value")
     add("brief", "print what no agent or person may lose: critical statements and active work")
+    au = add("audit", "score the repository: every problem by rule, and its marked debt")
+    au.add_argument("--against", metavar="REV",
+                    help="compare with another commit, and exit 1 if the score got worse")
+    au.add_argument("--list", action="store_true", help="list each problem, not just the counts")
+    cv = add("coverage", "how much of the code its design citations claim")
+    cv.add_argument("paths", nargs="*", help="limit to these files or directories")
+    cv.add_argument("--strict", action="store_true",
+                    help="count only Implements and Tests citations, not mentions")
+    cv.add_argument("--by", choices=["dir", "file"], default="dir",
+                    help="group by top-level directory (default) or list every file")
     pa = add("path", "show the chain of links from the master to a doc or tag")
     pa.add_argument("target", help="a doc's path, a tag, or an ID")
     tree = add("tree", "show how statements refine one another")
@@ -277,7 +287,11 @@ def dispatch(args):
 
     for e in errors:
         print(f"cpo: {e}", file=sys.stderr)
-    if args.command == "path":
+    if args.command == "coverage":
+        status = cmd_coverage(args, defs, repo)
+    elif args.command == "audit":
+        status = cmd_audit(args, defs, repo)
+    elif args.command == "path":
         status = cmd_path(args, defs, repo)
     elif args.command == "brief":
         status = cmd_brief(args, defs, repo)
@@ -336,7 +350,8 @@ def cmd_brief(args, defs, repo):
     lines = []
     if critical:
         lines.append("Critical:")
-        lines += [f"  {d.tag} {d.name} ({d.path}:{d.line})" + (
+        lines += [f"  {d.tag} {d.name} ({d.path}:{d.line})"
+                  + (f"  [STALE: {d.fields[s['stale']]}]" if s["stale"] in d.fields else "") + (
             "" if short(d.text).startswith(d.name.rstrip('.')) else f"\n    {short(d.text)}")
             for d in critical]
     if working:
@@ -354,6 +369,113 @@ def cmd_brief(args, defs, repo):
                       "stale_days": stale(d)} for d in working]},
          "\n".join(lines), args.json)
     return 0
+
+
+def cmd_coverage(args, defs, repo):
+    files = docs.tracked_files(repo)
+    if args.paths:
+        want = [str(Path(p).resolve().relative_to(repo)).rstrip("/") for p in args.paths]
+        files = [f for f in files if any(f == w or f.startswith(w + "/") for w in want)]
+    rows = lint_mod.coverage(repo, files, defs, docs.config(repo).get("exclude", []),
+                             strict=args.strict)
+
+    def total(rs):
+        return sum(r["covered"] for r in rs), sum(r["lines"] for r in rs)
+
+    def pct(c, n):
+        return f"{100 * c / n:5.1f}%" if n else "    -"
+
+    measured = [r for r in rows if r["measured"]]
+    impl = [r for r in measured if not r["test"]]
+    tests = [r for r in measured if r["test"]]
+    lines = ["Covered by " + ("Implements and Tests citations" if args.strict
+                              else "any citation, mentions included") + ":"]
+    for label, rs in (("implementation", impl), ("tests", tests)):
+        c, n = total(rs)
+        lines.append(f"{label:15} {c:7} of {n:7} lines covered  {pct(c, n)}")
+    un = [r for r in rows if not r["measured"]]
+    if un:
+        lines.append(f"{'unmeasured':15} {sum(r['lines'] for r in un):7} lines in {len(un)} "
+                     f"files no parser reads ({', '.join(sorted({Path(r['path']).suffix for r in un}))})")
+    groups = {}
+    for r in measured:
+        key = r["path"] if args.by == "file" else (r["path"].split("/", 1)[0] if "/" in r["path"] else ".")
+        groups.setdefault(key, []).append(r)
+    lines.append("")
+    for key in sorted(groups, key=lambda k: -total(groups[k])[1]):
+        c, n = total(groups[key])
+        lines.append(f"  {pct(c, n)}  {c:7} / {n:<7} {key}")
+    emit({"implementation": dict(zip(("covered", "lines"), total(impl))),
+          "tests": dict(zip(("covered", "lines"), total(tests))),
+          "unmeasured": sum(r["lines"] for r in un), "files": rows},
+         "\n".join(lines), args.json)
+    return 0
+
+
+def audit_at(repo, args, defs=None):
+    files = docs.tracked_files(repo)
+    if defs is None:
+        _, defs, _ = docs.load(root=repo, files=files)
+    result = lint_mod.audit(repo, files, defs, lint_limits(repo, args), docs.config(repo))
+    exclude = docs.config(repo).get("exclude", [])
+    result["coverage"] = {}
+    for key, strict in (("any", False), ("strict", True)):
+        rows = [r for r in lint_mod.coverage(repo, files, defs, exclude, strict)
+                if r["measured"] and not r["test"]]
+        n = sum(r["lines"] for r in rows)
+        result["coverage"][key] = 100 * sum(r["covered"] for r in rows) / n if n else 0.0
+    return result
+
+
+def audit_rev(repo, rev, args):
+    """The audit of another commit, in a temporary worktree removed after."""
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="cpo-audit-")) / "tree"
+    subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(tmp), rev],
+                   cwd=repo, check=True, capture_output=True)
+    try:
+        return audit_at(tmp, args)
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(tmp)], cwd=repo,
+                       capture_output=True)
+
+
+def cmd_audit(args, defs, repo):
+    now = audit_at(repo, args, defs)
+    before = audit_rev(repo, args.against, args) if args.against else None
+    rules = set(now["rules"]) | set(before["rules"] if before else [])
+    lines = [f"Score {now['score']}" + (
+        f" (was {before['score']} at {args.against}, "
+        f"{'+' if now['score'] >= before['score'] else ''}{now['score'] - before['score']})"
+        if before else "")]
+    for c in [*lint_mod.STANDARDS, "other"]:
+        mine = sorted(r for r in rules if lint_mod.standard_of(r) == c)
+        if not mine and c == "other":
+            continue
+        note = ""
+        if c == "completeness":
+            cov = now["coverage"]
+            note = (f"  (implementation coverage {cov['any']:.1f}%, "
+                    f"{cov['strict']:.1f}% strictly)")
+        lines.append(f"  {c.capitalize()}: {now['standards'].get(c, 0)}{note}")
+        for r in mine:
+            n = now["rules"].get(r, 0)
+            was = f"  (was {before['rules'].get(r, 0)})" if before else ""
+            lines.append(f"    {n:5}  {r}{was}")
+    stale = now["debt"]["stale"]
+    lines.append(f"Debt, not scored: {len(stale)} marked stale, "
+                 f"{len(now['debt']['postponed_orphans'])} orphans postponed")
+    for m in stale:
+        lines.append(f"  stale: {m['path']}:{m['line']} {m['what']}: {m['reason']}")
+    if args.list:
+        lines += [f"{p.path}:{p.line}: {p.rule}: {p.message}" for p in now["problems"]]
+    data = {"score": now["score"], "standards": now["standards"], "rules": now["rules"],
+            "coverage": now["coverage"], "debt": now["debt"],
+            "problems": [asdict(p) for p in now["problems"]] if args.list else None}
+    if before:
+        data["against"] = {"rev": args.against, "score": before["score"], "rules": before["rules"]}
+    emit(data, "\n".join(lines), args.json)
+    return 1 if before and now["score"] > before["score"] else 0
 
 
 def cmd_path(args, defs, repo):

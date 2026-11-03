@@ -16,7 +16,8 @@ DEFINITION = re.compile(
 )
 TITLE = re.compile(r"^\*\*(.+?)\*\*")
 SHORT_LIST = re.compile(rf"\[({ID}(?:,\s*{ID})*)\]")
-ROLE_WORD = re.compile(r"\b(Implements|Tests)\s*\[$")
+# Implements [CPO§T6], and a numbered design's own form, "Implements §5a".
+ROLE_WORD = re.compile(r"\b(Implements|Tests)\s*\[?$")
 
 
 @dataclass
@@ -52,12 +53,17 @@ def repo_root(start="."):
     return Path(out.stdout.strip())
 
 
+# Concipio's own files mention tags by the hundred, as the subjects of
+# their records, and never cite them.
+OWN_FILES = (".cpo", ".cpo-baseline.toml")
+
+
 def tracked_files(root):
     out = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=root, capture_output=True, text=True, check=True,
     )
-    return [p for p in out.stdout.split("\0") if p]
+    return [p for p in out.stdout.split("\0") if p and p.rsplit("/", 1)[-1] not in OWN_FILES]
 
 
 # Implements [CPO§T20]
@@ -337,7 +343,9 @@ def sources(root):
     for src in config(root).get("source", []):
         out.append({"doc": src["doc"], "prefix": src["prefix"],
                     "heading": re.compile(src["heading"]),
-                    "cite": re.compile(src["cite"])})
+                    "cite": re.compile(src["cite"]),
+                    # Whether a bare §5c in a code comment means this doc's.
+                    "code_default": bool(src.get("bare_in_code"))})
     return out
 
 
@@ -379,17 +387,36 @@ def heading_definitions(root, src, defs, errors, pattern=None):
         stack.append((level, tag))
 
 
+FILE_DEFAULT = re.compile(r"cpo-default:\s*([^\s*/>]+)")
+
+
+def file_default(text, srcs):
+    """The source a code file names as what its bare section numbers mean,
+    with a `cpo-default: DESIGN` comment in its first lines [T44]."""
+    for line in text.splitlines()[:30]:
+        m = FILE_DEFAULT.search(line)
+        if m:
+            return next((s for s in srcs if m.group(1) in (s["prefix"], s["doc"])), None)
+    return None
+
+
 def source_citations(root, files, defs, srcs):
     for path in files:
         try:
             text = (Path(root) / path).read_text()
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
+        named = file_default(text, srcs) if not path.endswith(".md") else None
         lines = list(prose_lines(text)) if path.endswith(".md") else \
             list(enumerate(text.splitlines(), 1))
         for n, line in lines:
             for src in srcs:
                 patterns = [src["cite"]]
+                # In code, a bare §5c means the doc the file names, or else
+                # the one the project names [T44].
+                if not path.endswith(".md") and (
+                        src is named or (named is None and src["code_default"])):
+                    patterns.append(BARE_SECTION)
                 # Inside its own doc, a bare §5c means that doc's §5c.
                 if path == src["doc"]:
                     if src["heading"].match(line):
@@ -404,6 +431,31 @@ def source_citations(root, files, defs, srcs):
                             defs[tag].citations.append(Citation(
                                 path, n, role_before(line, m.start() - 1), line.strip(),
                                 m.start(), m.end()))
+
+
+def doc_fields(text, pattern=None):
+    """Fields that describe a whole doc: attribute lists between its title
+    and its first section, or in its front matter [F2]."""
+    lines = text.splitlines()
+    fields = {}
+    if lines and lines[0].strip() == "---":
+        import tomllib
+        end = next((i for i, l in enumerate(lines[1:], 1) if l.strip() == "---"), None)
+        if end:
+            for l in lines[1:end]:
+                k, _, v = l.partition(":")
+                if k.strip() and v.strip():
+                    fields[k.strip()] = v.strip().strip('"')
+            lines = lines[end + 1:]
+    opening = []
+    for l in lines:
+        if l.startswith("## "):
+            break
+        if not l.startswith("# "):
+            opening.append(l)
+    found, _ = statement_fields(opening, pattern)
+    fields.update(found)
+    return fields
 
 
 def load(start=".", root=None, files=None):

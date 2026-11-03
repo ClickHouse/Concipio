@@ -12,6 +12,11 @@ on the team has understood. Concipio helps a reviewer climb from the concepts
 they know, through the medium-level concepts they don't, down to the code,
 without exhausting their attention.
 
+**CPO§M52:** Concipio holds docs to three standards. **Completeness:** every
+line of code traces to a design, and every doc is reachable. **Correctness:**
+the docs say what the code does, and agree with one another. **Consumability:**
+every design fits on a screen, and what matters most stays near the top.
+
 Concipio is a tool for LLM agents. An agent sweeping a diff asks Concipio what
 remains, and Concipio answers pass or fail: either every changed span of code
 belongs to a concept or is explicitly marked unjustified, or here is what is
@@ -20,6 +25,15 @@ the change, one concept at a time.
 
 This README is Concipio's master design document. A tag such as `CPO§M3`
 defines a design point; within the design docs, `[M3]` refers to it.
+
+## Install
+
+`uv tool install git+<this repository's URL>` puts `cpo` on your path, or
+`uv tool install --editable <a checkout>` to follow a checkout's changes,
+reinstalling with `--reinstall` whenever its dependencies change. If the shell
+then cannot find `cpo`, `uv tool update-shell` adds uv's tool directory to the
+path. `cpo --help`
+lists the commands, and `cpo help agent` is the guide for agents.
 
 ## The problem
 
@@ -73,6 +87,11 @@ interchangeable for this rule; what matters is that a reader can take in one
 design at a time, then go deeper only where they need to. Docs that define no
 statements, such as notes and reports, are exempt.
 
+- **CPO§M51:** `cpo coverage` reports how much code the design's citations
+  claim: lines inside declarations some comment cites, by directory, with
+  tests counted apart and files no parser reads counted as unmeasured.
+  Strictly only `Implements` and `Tests` citations cover code [T6]; a project
+  still adopting can count every mention, and watch the strict number grow.
 - **CPO§M49:** Every design point claims no more code than a reader can
   hold in mind: by default, 200 lines of implementation, tests counted
   apart. A point that claims more needs refining into sub-points; a
@@ -278,7 +297,14 @@ review teaches before any of them is built.
       may list the discussions behind it with a line each, or a doc may cite
       its parent, as the people and agents maintaining it prefer. Historic
       docs count too, so each needs a succinct description somewhere.
-    - **CPO§M27:** Before creating a concept or design statement, an agent
+    - **CPO§M50:** `cpo audit` scores a repository rather than passing or
+    failing it: every problem, counted by rule, and a total. With
+    `--against` it compares another commit, and fails only if the total
+    grew, so every commit can leave the docs a little better without having
+    to fix all of them. Debt a project has marked, such as stale docs and
+    postponed orphans, is reported beside the score, not in it, so that
+    marking a problem never costs more than hiding it.
+  - **CPO§M27:** Before creating a concept or design statement, an agent
       searches for an existing one by walking the doc hierarchy down from the
       master. The hierarchy is the index. A vector index may speed the
       search, but it is generated and never committed.

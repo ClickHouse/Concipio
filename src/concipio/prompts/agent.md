@@ -85,6 +85,45 @@ When the change merges, its concepts should join the design of the branch it
 merged into: merge duplicates with the concepts already there, and make the
 review's cornerstone a child of that branch's design.
 
+## Adopting Concipio in a repository
+
+Concipio holds docs to three standards: completeness (every line of code
+traces to a design, every doc is reachable), correctness (the docs say what
+the code does and agree with one another), and consumability (every design
+fits on a screen, and what matters most stays near the top). The commands:
+
+- `cpo audit` scores all three. `cpo audit --against main` fails only if a
+  change made the score worse; aim to lower it a little in every commit.
+- `cpo lint` reports each problem, and passes when nothing is new or worse
+  than `.cpo-baseline.toml`. After fixing problems, tighten the baseline with
+  `cpo lint --write-baseline`. Never rewrite it to hide a new problem.
+- `cpo coverage` shows how much code the design's citations claim, by
+  directory. `--strict` counts only `Implements` and `Tests` citations.
+- `cpo path <doc or tag>` shows how a doc is reached from the master;
+  `cpo show <tag>` shows a statement and everything citing it; `cpo brief`
+  prints what nobody may lose.
+
+The conventions:
+
+- `.cpo` declares the docs whose numbered headings define citable sections,
+  with their prefix and citation pattern. Within a doc, a bare `§5c` means
+  that doc's section; in code, it means the source marked `bare_in_code`, or
+  the one a file names with a `cpo-default: PREFIX` comment.
+- A citation of the form `Implements §5c` or `Tests §5c` covers the
+  function or block it documents. A bare `§5c` is only a reference. Upgrade a
+  reference to `Implements` only when the code truly is that section's
+  implementation; a reference that explains is not one.
+- Every doc must be reachable from the master by links; give each one a line
+  of description where it belongs. Fields are Markdown attribute lists:
+  `{Importance=critical}` keeps a statement near the top and in the brief, and
+  `{Stale="why"}` marks what you cannot fix yet. A critical statement also
+  carries `{Verified=<date>}`, set only after you check it against the code;
+  lint asks again when the date ages or the code citing it changes.
+- Headings say what is true now. Dates and status words such as "built" or
+  "settled" in a design's headings are history, which belongs in reports.
+- A design point should claim no more than 200 lines of code; refine it into
+  sub-points, or extract smaller routines.
+
 ## Asking why
 
 Concipio also answers questions outside a review. Before reading files to

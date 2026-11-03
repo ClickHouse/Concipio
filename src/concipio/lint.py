@@ -210,6 +210,8 @@ def check(root, files, defs, limits, cfg=None):
     """Every rule, with limits from `.cpo` [T33]."""
     problems = lint(root, files, defs, limits["statement_limit"], limits["section_limit"])
     problems += field_problems(root, files, defs, cfg or {}, limits["master"])
+    problems += dangling_sections(root, files)
+    problems += history_in_headings(root, files, defs, (cfg or {}).get("lint", {}).get("history_words"))
     lost, later = orphans(root, files, defs, limits["master"], limits["postponed"])
     for f in lost:
         problems.append(Problem(f, 1, "orphan",
@@ -237,7 +239,8 @@ def known(problem, baseline):
 
 
 FIELD_DEFAULTS = {"importance": "Importance", "critical": ["critical"], "critical_depth": 2,
-                  "updated": "Updated", "stale_after_days": 21, "known": []}
+                  "updated": "Updated", "stale_after_days": 21, "known": [], "stale": "Stale",
+                  "verified": "Verified", "verify_every_days": 90}
 
 
 def field_settings(cfg):
@@ -268,7 +271,7 @@ def field_problems(root, files, defs, cfg, master):
         known.update(schema.get("require", []))
         known.update(schema.get("fields", {}))
     if s["known"] or s["schemas"]:
-        known.update([s["importance"], s["updated"]])
+        known.update([s["importance"], s["updated"], s["stale"], s["verified"]])
     problems = []
     for d in defs.values():
         for e in d.fields.pop("__errors__", []) if "__errors__" in d.fields else []:
@@ -310,6 +313,37 @@ def field_problems(root, files, defs, cfg, master):
                 problems.append(Problem(d.path, d.line, "buried",
                                         f"{d.tag} ({d.name}) is critical but {how}; keep it "
                                         f"within {s['critical_depth']}", d.tag, depth or 99))
+    # Implements [CPO§F16]
+    import datetime
+    today = datetime.date.today()
+    for d in critical:
+        stamp = d.fields.get(s["verified"])
+        if s["stale"] in d.fields:
+            # Known wrong is not the same as unchecked, and a reader needs
+            # to see which.
+            problems.append(Problem(d.path, d.line, "stale-critical",
+                                    f"{d.tag} ({d.name}) is critical and marked stale: "
+                                    f"{d.fields[s['stale']]}", d.tag, 1))
+            continue
+        if not stamp:
+            problems.append(Problem(d.path, d.line, "unverified-critical",
+                                    f"{d.tag} ({d.name}) is critical but says nowhere when it was "
+                                    f"last checked against the code; add {s['verified']}=<date>",
+                                    d.tag, 1))
+            continue
+        try:
+            age = (today - datetime.date.fromisoformat(str(stamp))).days
+        except ValueError:
+            problems.append(Problem(d.path, d.line, "unverified-critical",
+                                    f"{d.tag}: {s['verified']}={stamp} is not a date", d.tag, 1))
+            continue
+        changed = code_changed_since(root, d, str(stamp))
+        if age > s["verify_every_days"] or changed:
+            why = (f"code citing it changed since ({changed})" if changed
+                   else f"{age} days ago")
+            problems.append(Problem(d.path, d.line, "unverified-critical",
+                                    f"{d.tag} ({d.name}) was last verified {stamp}, {why}; "
+                                    "check it and update the date", d.tag, 1))
     # Implements [CPO§F15]
     for d in defs.values():
         stamp = d.fields.get(s["updated"])
@@ -337,3 +371,184 @@ def last_changed(root, d):
     if "0000000000000000000000000000000000000000" in out.stdout:
         return datetime.date.today().isoformat()
     return datetime.date.fromtimestamp(max(times)).isoformat() if times else None
+
+
+def names_a_doc(before):
+    """Whether the word just before a section number names a document: one
+    with several capitals, such as DESIGN or RFC, or with a digit or a dot
+    in it, such as notes-2.md. An ordinary word, a capitalized first word,
+    or another section number does not."""
+    words = before.split()
+    if not words:
+        return False
+    word = words[-1].strip("([,;:")
+    if not word or word.startswith("§"):
+        return False
+    return sum(c.isupper() for c in word) >= 2 or any(c.isdigit() or c in "._-" for c in word)
+
+
+# Implements [CPO§T43]
+def dangling_sections(root, files):
+    """Bare section numbers that name no section of their own doc, in the
+    docs `.cpo` declares as defining their sections [T39]. Other docs may
+    number their own sections yet cite another's bare, so only a declared
+    source's bare numbers are known to be its own."""
+    out = []
+    declared = {src["doc"] for src in docs.sources(root)}
+    for f in files:
+        if f not in declared:
+            continue
+        text = (root / f).read_text(errors="replace")
+        heads = docs.numbered_headings(text)
+        if not heads:
+            continue
+        linked = re.compile(r"\]\(\s*<?[^)>\s#]+\.md[^)]*\)[\s,]*$")
+        for n, line in docs.prose_lines(text):
+            if docs.NUMBERED.match(line):
+                continue
+            for m in docs.BARE_SECTION.finditer(line):
+                before = line[:m.start()]
+                # Another doc's section, as in "DESIGN §5", "notes.md §3", or a
+                # link: the word before it names a document.
+                if linked.search(before) or names_a_doc(before):
+                    continue
+                if m["id"] not in heads:
+                    # Keyed by the number, not the line, so a known problem
+                    # stays known when edits elsewhere move it.
+                    out.append(Problem(f, n, "dangling-section",
+                                       f"§{m['id']} names no section of {f}",
+                                       f"§{m['id']}", 1))
+    return out
+
+
+# Implements [CPO§T42]
+def stale_marks(root, files, defs, cfg):
+    """Statements, sections, and docs marked stale, with their reasons."""
+    s = field_settings(cfg)
+    pattern = docs.field_pattern(root)
+    out = []
+    for d in defs.values():
+        if s["stale"] in d.fields:
+            out.append({"path": d.path, "line": d.line, "what": f"{d.tag} ({d.name})",
+                        "reason": str(d.fields[s["stale"]])})
+    for f in files:
+        if f.endswith(".md"):
+            fields = docs.doc_fields((root / f).read_text(errors="replace"), pattern)
+            if s["stale"] in fields:
+                out.append({"path": f, "line": 1, "what": f, "reason": str(fields[s["stale"]])})
+    return out
+
+
+# Implements [CPO§M52]
+STANDARDS = {
+    "completeness": ("orphan",),
+    "correctness": ("dangling-section", "stale-updated", "schema", "undeclared-field",
+                    "field-syntax", "unverified-critical", "stale-critical",
+                    "history-in-heading"),
+    "consumability": ("section-length", "statement-length", "breadth", "buried"),
+}
+
+
+def standard_of(rule):
+    return next((c for c, rules in STANDARDS.items() if rule in rules), "other")
+
+
+# Implements [CPO§M50]
+def audit(root, files, defs, limits, cfg):
+    """Every problem, counted by rule, and the debt a project has marked,
+    for a score each commit can improve rather than a pass or fail."""
+    problems, later = check(root, files, defs, limits, cfg)
+    weights = cfg.get("audit", {}).get("weights", {})
+    counts = {}
+    for p in problems:
+        counts[p.rule] = counts.get(p.rule, 0) + 1
+    score = sum(n * weights.get(rule, 1) for rule, n in counts.items())
+    by_standard = {}
+    for rule, n in counts.items():
+        c = standard_of(rule)
+        by_standard[c] = by_standard.get(c, 0) + n * weights.get(rule, 1)
+    return {"score": score, "rules": counts, "standards": by_standard,
+            "debt": {"stale": stale_marks(root, files, defs, cfg), "postponed_orphans": later},
+            "problems": problems}
+
+
+CODE_EXTENSIONS = (".c", ".h", ".cc", ".cpp", ".hpp", ".py", ".rb", ".sh", ".bash", ".go",
+                   ".rs", ".js", ".ts", ".java")
+
+
+# Implements [CPO§M51]
+def coverage(root, files, defs, exclude=(), strict=False):
+    """How much code its design citations claim: per file, the non-blank
+    lines inside declarations that some comment cites [T8], with tests
+    counted apart, and files no parser reads reported as unmeasured.
+    Strictly, only implementation and test citations cover code [T6]; a
+    project still adopting may count every mention."""
+    cited = {}
+    for d in defs.values():
+        for c in d.citations:
+            if not c.path.endswith(".md") and (not strict or c.role != "reference"):
+                cited.setdefault(c.path, set()).add(c.line)
+    out = []
+    for f in files:
+        if any(fnmatch.fnmatch(f, p) for p in exclude):
+            continue
+        try:
+            text = (root / f).read_text(errors="replace")
+        except (FileNotFoundError, IsADirectoryError, UnicodeDecodeError):
+            continue
+        lang = spans_mod.language_of(f, text)
+        if lang is None and not f.endswith(CODE_EXTENSIONS):
+            continue
+        lines = text.splitlines()
+        code = {n for n, l in enumerate(lines, 1) if l.strip()}
+        row = {"path": f, "lines": len(code), "covered": 0, "test": spans_mod.is_test(f),
+               "measured": lang is not None, "citations": len(cited.get(f, ()))}
+        if lang is not None and f in cited:
+            decls = spans_mod.declarations(lang, text)
+            hit = set()
+            for line in cited[f]:
+                node = covered_node(decls, line)
+                if node:
+                    hit.update(range(node[0], node[1] + 1))
+            row["covered"] = len(hit & code)
+        out.append(row)
+    return out
+
+
+def code_changed_since(root, d, stamp):
+    """A code file citing the statement that git says changed after the
+    date, or None."""
+    import subprocess
+    for path in sorted({c.path for c in d.citations if not c.path.endswith(".md")}):
+        out = subprocess.run(["git", "log", "-1", "--format=%cs", f"--since={stamp} 23:59:59",
+                              "--", path], cwd=root, capture_output=True, text=True)
+        if out.stdout.strip():
+            return path
+    return None
+
+
+HISTORY_WORDS = ["BUILT", "DESIGNED", "UNSCHEDULED", "SETTLED", "DRAFTED", "RULED",
+                 "added", "written down", "built", "unscheduled", "settled", "drafted"]
+
+
+# Implements [CPO§T45]
+def history_in_headings(root, files, defs, words=None):
+    """Headings in design docs that record when something was decided, built,
+    or found broken. A design says what is true now; its history belongs in
+    reports, and its rulings in decisions with reasons [M47]."""
+    words = HISTORY_WORDS if words is None else words
+    pattern = re.compile(r"\b\d{4}-\d{2}-\d{2}\b|" + "|".join(
+        rf"\b{re.escape(w)}\b" for w in words))
+    designs = {d.path for d in defs.values()}
+    out = []
+    for f in sorted(designs):
+        text = (root / f).read_text(errors="replace")
+        for n, line in docs.prose_lines(text):
+            m = HEADING.match(line)
+            if m and pattern.search(m.group(2)):
+                found = pattern.search(m.group(2)).group(0)
+                out.append(Problem(f, n, "history-in-heading",
+                                   f'heading "{m.group(2)[:70]}" records history ("{found}"); '
+                                   "say what is true now, and move the history out",
+                                   m.group(2)[:60], 1))
+    return out

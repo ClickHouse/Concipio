@@ -256,7 +256,11 @@ class Server:
         index = self.index_for(path)
         for src in getattr(index, "sources", []):
             patterns = [src["cite"]]
-            if path == index.root / src["doc"]:
+            if path.suffix != ".md":
+                named = docs.file_default("\n".join(lines), index.sources)
+                if src is named or (named is None and src.get("code_default")):
+                    patterns.append(docs.BARE_SECTION)
+            elif path == index.root / src["doc"]:
                 patterns.append(docs.BARE_SECTION)
             for pattern in patterns:
                 for m in pattern.finditer(line):

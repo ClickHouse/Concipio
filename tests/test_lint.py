@@ -182,3 +182,107 @@ def test_fields_are_not_read_from_code_or_sets():
         "Owner": "Ann, Bo", "Due": "2026-12-01"}
     fields, _ = statement_fields(["- **X§1:** A.", "  ```toml", "  {Owner=Nope}", "  ```"])
     assert fields == {}
+
+
+def test_audit_scores_problems_and_reports_marked_debt(tmp_path):
+    import subprocess
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md) and [old](old.md).\n",
+        "DESIGN.md": "# Design\n\n## 1. Scope\n\nAs §1 says, and §9 claims.\n\n"
+                     "## 2. Roster\n\n{Stale=\"five reviewers now\"}\n\nEight of them.\n",
+        "old.md": "# Old notes\n\n{Stale=\"superseded by the design\"}\n\nText.\n",
+        "lost.md": "Nothing links here.\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\nprefix = "D"\n'
+           "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\ncite = 'D\\s*§\\s*(?P<id>\\d+)'\n")
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "a"],
+                   cwd=tmp_path, check=True)
+    status, d = run_audit(tmp_path)
+    assert d["rules"] == {"dangling-section": 1, "orphan": 1}, "§9 and lost.md"
+    assert d["score"] == 2 and status == 0
+    assert sorted(m["reason"] for m in d["debt"]["stale"]) == [
+        "five reviewers now", "superseded by the design"]
+    (tmp_path / "README.md").write_text("# Top\n\nSee [the design](DESIGN.md), [old](old.md), "
+                                        "and [lost](lost.md).\n")
+    status, d = run_audit(tmp_path, "--against", "HEAD")
+    assert d["score"] == 1 and d["against"]["score"] == 2 and status == 0
+    (tmp_path / "DESIGN.md").write_text("# Design\n\n## 1. Scope\n\n§7, §8, and §9.\n")
+    status, d = run_audit(tmp_path, "--against", "HEAD")
+    assert d["score"] > d["against"]["score"] and status == 1, "worse than HEAD fails"
+
+
+def run_audit(tmp_path, *flags):
+    import json, os, subprocess, sys
+    out = subprocess.run([sys.executable, "-m", "concipio.cli", "audit", "--json", *flags],
+                         cwd=tmp_path, capture_output=True, text=True,
+                         env=dict(os.environ, XDG_DATA_HOME=str(tmp_path / "data")))
+    return out.returncode, json.loads(out.stdout)
+
+
+def test_code_names_what_its_bare_section_numbers_mean(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md) and [the spec](SPEC.md).\n",
+        "DESIGN.md": "# Design\n\n## 1. One\n\n## 2. Two\n",
+        "SPEC.md": "# Spec\n\n## 1. Wire format\n",
+        "a.c": "/* Routing, per §2. */\nint a(void) { return 0; }\n",
+        "b.c": "/* cpo-default: SPEC */\n/* Encodes §1. */\nint b(void) { return 0; }\n",
+    }, cpo=("[[source]]\ndoc = \"DESIGN.md\"\nprefix = \"DESIGN\"\nbare_in_code = true\n"
+            "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\ncite = 'DESIGN\\s*§\\s*(?P<id>\\d+)'\n\n"
+            "[[source]]\ndoc = \"SPEC.md\"\nprefix = \"SPEC\"\n"
+            "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\ncite = 'SPEC\\s*§\\s*(?P<id>\\d+)'\n"))
+    _, defs, _ = docs.load(root=tmp_path)
+    assert [c.path for c in defs["DESIGN§2"].citations] == ["a.c"], "the project's default"
+    assert [c.path for c in defs["SPEC§1"].citations] == ["b.c"], "the file's own default"
+    assert defs["DESIGN§1"].citations == [], "b.c's §1 is SPEC's, not DESIGN's"
+
+
+def test_implements_works_without_brackets_for_numbered_sections(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md).\n",
+        "DESIGN.md": "# Design\n\n## 5. Drain\n",
+        "a.c": "/* Implements §5 */\nint a(void) { return 0; }\n"
+               "/* Implements DESIGN §5 */\nint b(void) { return 0; }\n"
+               "/* See §5. */\nint c(void) { return 0; }\n",
+    }, cpo=("[[source]]\ndoc = \"DESIGN.md\"\nprefix = \"DESIGN\"\nbare_in_code = true\n"
+            "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\ncite = 'DESIGN\\s*§\\s*(?P<id>\\d+)'\n"))
+    _, defs, _ = docs.load(root=tmp_path)
+    assert sorted((c.line, c.role) for c in defs["DESIGN§5"].citations) == [
+        (1, "implementation"), (3, "implementation"), (5, "reference")]
+
+
+def test_a_known_dangling_reference_survives_edits_that_move_it(tmp_path):
+    lint_repo(tmp_path, {"README.md": "# Top\n\nSee [the design](DESIGN.md).\n",
+                         "DESIGN.md": "# Design\n\n## 1. One\n\nSee §9.\n"},
+              cpo='[[source]]\ndoc = "DESIGN.md"\nprefix = "D"\n'
+                  "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\ncite = 'D\\s*§\\s*(?P<id>\\d+)'\n")
+    assert run_lint(tmp_path, "--write-baseline")[0] == 0
+    (tmp_path / "DESIGN.md").write_text("# Design\n\nNew text.\n\n## 1. One\n\nSee §9.\n")
+    assert run_lint(tmp_path)[0] == 0
+
+
+def test_critical_statements_must_say_when_they_were_verified(tmp_path):
+    import subprocess
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** Never lose data. {Importance=critical}\n"
+                     "- **X§2:** Checked. {Importance=critical Verified=2099-01-01}\n"
+                     "- **X§3:** Old. {Importance=critical Verified=2000-01-01}\n",
+    })
+    _, d = run_lint(tmp_path)
+    flagged = sorted(p["key"] for p in d["problems"] if p["rule"] == "unverified-critical")
+    assert flagged == ["X§1", "X§3"]
+
+
+def test_headings_that_record_history_are_flagged(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n## The drain\n\n- **X§1:** A point.\n\n"
+                     "## The journal *(designed 2026-07-03, unscheduled)*\n\n- **X§2:** Another.\n"
+                     "\n## Notes\n",
+        "notes.md": "## Dated 2026-01-01, but not a design\n",
+    })
+    _, d = run_lint(tmp_path)
+    assert [p["line"] for p in d["problems"] if p["rule"] == "history-in-heading"] == [7]
+
+
+def test_a_critical_statement_can_be_known_stale(tmp_path):
+    lint_repo(tmp_path, {"README.md": '# Top\n\n- **X§1:** Write order. {Importance=critical Stale="rewrite pending"}\n'})
+    _, d = run_lint(tmp_path)
+    assert [p["rule"] for p in d["problems"]] == ["stale-critical"]

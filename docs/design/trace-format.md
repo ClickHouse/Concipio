@@ -117,6 +117,25 @@ overrides a default.
   in every doc. In a doc that defines tags by its numbered headings
   [T39], a resolved bare number is also a citation of the tag; elsewhere
   it is navigation only, since it names no tag.
+- **CPO§T42:** A statement, a section, or a whole doc may be marked stale
+  with a field that says why, `{Stale="the roster is now five reviewers"}`.
+  A whole doc carries it between its title and its first section, or in its
+  front matter. Marking staleness is cheaper than fixing it, and better than
+  leaving it unmarked, so a stale mark is reported as debt, not as a problem
+  [M50].
+- **CPO§T43:** In a doc that defines tags by its numbered headings [T39], a
+  bare section number that names none of its sections is dangling, and
+  `cpo lint` reports it. Other docs may number their own sections yet cite
+  another doc's bare, so their bare numbers are not checked.
+- **CPO§T44:** A code file is not a doc and has no sections of its own, so a
+  bare `§5c` in a comment means whatever the project says. A source in
+  `.cpo` with `bare_in_code = true` is what bare numbers mean in code, and a
+  file can override that with a comment, `cpo-default: SPEC`, in its first
+  lines, naming another source by prefix or path.
+- **CPO§T45:** A heading in a design doc that records history, a date or a
+  status word such as "built", "settled", or "unscheduled", is reported. A
+  design says what is true now; when it changed belongs in reports, and why
+  in decisions with reasons [M47]. `.cpo` may change the list of words.
 - **CPO§T34:** Projects that already use Doxygen's `\satisfies` and
   `\verifies`, or StrictDoc's `@relation`, can map those markers to
   Concipio's roles [T22] instead of adding a second set.

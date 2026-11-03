@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import tree_sitter_bash
 import tree_sitter_c
+import tree_sitter_python
 import tree_sitter_ruby
 from tree_sitter import Language, Parser
 
@@ -13,6 +14,7 @@ LANGUAGES = {
     "ruby": Language(tree_sitter_ruby.language()),
     "bash": Language(tree_sitter_bash.language()),
     "c": Language(tree_sitter_c.language()),
+    "python": Language(tree_sitter_python.language()),
 }
 RSPEC_SPANS = {"it", "specify", "example", "before", "after", "around",
                "let", "let!", "subject"}
@@ -51,20 +53,27 @@ def language_of(path, text):
         return "ruby"
     if path.endswith((".c", ".h")):
         return "c"
+    if path.endswith(".py"):
+        return "python"
     if path.endswith((".sh", ".bash")):
         return "bash"
     first = text.split("\n", 1)[0] if text else ""
     if first.startswith("#!"):
         if "ruby" in first:
             return "ruby"
+        if "python" in first:
+            return "python"
         if re.search(r"\b(ba)?sh\b", first):
             return "bash"
     return None
 
 
 def is_test(path):
-    return (path.startswith(("spec/", "test/")) or "/spec/" in path
-            or path.endswith(("_spec.rb", "_test.rb")))
+    name = path.rsplit("/", 1)[-1]
+    return (path.startswith(("spec/", "test/", "tests/")) or "/spec/" in path
+            or "/test/" in path or "/tests/" in path
+            or path.endswith(("_spec.rb", "_test.rb", "_test.py", "_test.c"))
+            or (name.startswith("test_") and name.endswith((".py", ".c"))))
 
 
 def node_text(node):
@@ -87,6 +96,12 @@ def classify(lang, node):
     t = node.type
     if lang == "c":
         return classify_c(node)
+    if lang == "python":
+        if t == "class_definition":
+            return "class scope", node_text(node.child_by_field_name("name"))
+        if t == "function_definition":
+            return "function", node_text(node.child_by_field_name("name"))
+        return None
     if lang == "bash":
         if t == "function_definition":
             return "function", node_text(node.child_by_field_name("name"))

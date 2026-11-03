@@ -68,6 +68,14 @@ fields.Bugzilla = { pattern = '^\d+$' }
   nobody may miss it: a correctness gap, a reason not to use the project, a
   limit that loses data. A project may rename the field or its values in
   its schema.
+  - **CPO§F16:** A critical statement says when someone last checked it
+    against the code, `{Verified=2026-11-03}`. `cpo lint` reports a critical
+    statement with no such date, one older than 90 days by default, or one
+    whose citing code has changed since. Importance makes a claim more
+    prominent, so a wrong critical claim does more harm than a wrong ordinary
+    one, and it is the one most worth re-checking. A critical statement known
+    to be wrong carries a stale mark as well [T42]; lint and the brief then
+    report it as critical and stale, not merely unverified.
   - **CPO§F10:** A critical statement must be reachable within two links of
     the master, by default. It need not be in the master, which would make
     the master long again, but it may never be buried. `cpo lint` reports

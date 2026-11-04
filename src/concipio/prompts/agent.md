@@ -113,6 +113,9 @@ The conventions:
   function or block it documents. A bare `§5c` is only a reference. Upgrade a
   reference to `Implements` only when the code truly is that section's
   implementation; a reference that explains is not one.
+- Code that serves no design, such as plumbing, takes a comment
+  `CPO§exempt: <why>` above it. Coverage counts it as accounted for, apart
+  from cited code. Never exempt a helper; cite what it supports.
 - Every doc must be reachable from the master by links; give each one a line
   of description where it belongs. Fields are Markdown attribute lists:
   `{Importance=critical}` keeps a statement near the top and in the brief, and
@@ -121,6 +124,10 @@ The conventions:
   lint asks again when the date ages or the code citing it changes.
 - Headings say what is true now. Dates and status words such as "built" or
   "settled" in a design's headings are history, which belongs in reports.
+- When a mechanism is removed, list its names under `[retired]` in `.cpo`,
+  each with why; lint then finds the passages that still describe it. Old
+  text kept verbatim goes under a path `.cpo` lists in `archive`, where
+  nothing in it counts. Never hide a section in a blockquote.
 - A design point should claim no more than 200 lines of code; refine it into
   sub-points, or extract smaller routines.
 

@@ -101,7 +101,10 @@ def doc_graph(root, files, defs):
     dirs = {}
     for f in md:
         dirs.setdefault(posixpath.dirname(f), []).append(f)
+    old = docs.archived(root, md)
     for f in md:
+        if f in old:
+            continue
         text = (root / f).read_text(errors="replace")
         for target in links_of(f, text):
             if target in known:
@@ -208,11 +211,15 @@ def breadth(root, defs):
 
 def check(root, files, defs, limits, cfg=None):
     """Every rule, with limits from `.cpo` [T33]."""
+    old = docs.archived(root, files)
+    every, files = files, [f for f in files if f not in old]
     problems = lint(root, files, defs, limits["statement_limit"], limits["section_limit"])
     problems += field_problems(root, files, defs, cfg or {}, limits["master"])
     problems += dangling_sections(root, files)
     problems += history_in_headings(root, files, defs, (cfg or {}).get("lint", {}).get("history_words"))
-    lost, later = orphans(root, files, defs, limits["master"], limits["postponed"])
+    problems += quoted_headings(root, defs)
+    problems += retired_terms(root, files, (cfg or {}).get("retired", {}))
+    lost, later = orphans(root, every, defs, limits["master"], limits["postponed"])
     for f in lost:
         problems.append(Problem(f, 1, "orphan",
                                 f"{f} is reachable from {limits['master']} by no chain of links "
@@ -403,11 +410,17 @@ def dangling_sections(root, files):
         if not heads:
             continue
         linked = re.compile(r"\]\(\s*<?[^)>\s#]+\.md[^)]*\)[\s,]*$")
+        prev = (None, "")
         for n, line in docs.prose_lines(text):
             if docs.NUMBERED.match(line):
+                prev = (None, "")
                 continue
             for m in docs.BARE_SECTION.finditer(line):
                 before = line[:m.start()]
+                # A number that opens a line may have wrapped away from the
+                # doc name that ends the line before it.
+                if not before.strip() and prev[0] == n - 1:
+                    before = prev[1]
                 # Another doc's section, as in "DESIGN §5", "notes.md §3", or a
                 # link: the word before it names a document.
                 if linked.search(before) or names_a_doc(before):
@@ -418,6 +431,73 @@ def dangling_sections(root, files):
                     out.append(Problem(f, n, "dangling-section",
                                        f"§{m['id']} names no section of {f}",
                                        f"§{m['id']}", 1))
+            prev = (n, line)
+    return out
+
+
+QUOTED_HEADING = re.compile(r"^\s{0,3}(?:>\s*)+(#{1,6})\s+(.*)$")
+
+
+# Implements [CPO§T47]
+def quoted_headings(root, defs):
+    """Headings hidden in blockquotes, in design docs: not sections, so
+    their text counts toward the section above them."""
+    out = []
+    for f in sorted({d.path for d in defs.values()}):
+        text = (root / f).read_text(errors="replace")
+        for n, line in docs.prose_lines(text):
+            m = QUOTED_HEADING.match(line)
+            if m:
+                out.append(Problem(f, n, "heading-in-blockquote",
+                                   f'heading "{m.group(2)[:70]}" is inside a blockquote, so it '
+                                   "is not a section; unquote it", m.group(2)[:60], 1))
+    return out
+
+
+COMMENT_LINE = re.compile(r"^\s*(?:#|//|/?\*|--|;)")
+
+
+# Implements [CPO§T48]
+def retired_terms(root, files, retired):
+    """Live docs and code comments that still use a retired term, one
+    problem per file and term, valued by how often."""
+    if not retired:
+        return []
+    pats = {t: re.compile(rf"(?<![\w]){re.escape(t)}(?![\w])") for t in retired}
+    out = []
+    for f in files:
+        md = f.endswith(".md")
+        if not md and not f.endswith(CODE_EXTENSIONS):
+            continue
+        try:
+            text = (root / f).read_text(errors="replace")
+        except (FileNotFoundError, IsADirectoryError):
+            continue
+        # A doc's inline code and examples name mechanisms too, so all of
+        # a doc is read; of code, only its comments.
+        lines = ((n, l) for n, l in enumerate(text.splitlines(), 1)
+                 if md or COMMENT_LINE.match(l))
+        found = {}
+        for n, line in lines:
+            for t, pat in pats.items():
+                k = len(pat.findall(line))
+                if k:
+                    first, count = found.get(t, (n, 0))
+                    found[t] = (first, count + k)
+        for t, (first, count) in sorted(found.items()):
+            out.append(Problem(f, first, "retired-term",
+                               f'"{t}" is retired ({retired[t]}) but used {count} time'
+                               f'{"s" if count > 1 else ""} here', t, count))
+        lang = None if md else spans_mod.language_of(f, text)
+        if lang:
+            live = {}
+            for n, name in spans_mod.identifiers(lang, text):
+                if name in retired:
+                    live.setdefault(name, n)
+            for t, n in sorted(live.items()):
+                out.append(Problem(f, n, "retired-term-live",
+                                   f'"{t}" is listed as retired in .cpo but is still live code '
+                                   "here; finish retiring it, or take it off the list", t, 1))
     return out
 
 
@@ -444,8 +524,10 @@ STANDARDS = {
     "completeness": ("orphan",),
     "correctness": ("dangling-section", "stale-updated", "schema", "undeclared-field",
                     "field-syntax", "unverified-critical", "stale-critical",
-                    "history-in-heading"),
-    "consumability": ("section-length", "statement-length", "breadth", "buried"),
+                    "history-in-heading", "retired-term",
+                    "retired-term-live"),
+    "consumability": ("section-length", "statement-length", "breadth", "buried",
+                      "heading-in-blockquote"),
 }
 
 
@@ -477,12 +559,18 @@ CODE_EXTENSIONS = (".c", ".h", ".cc", ".cpp", ".hpp", ".py", ".rb", ".sh", ".bas
 
 
 # Implements [CPO§M51]
+# Implements [CPO§T15]
+EXEMPT = re.compile(r"^\s*(?:#|//|/?\*|--|;)\s*CPO§exempt:\s*(?P<reason>\S.*?)\s*(?:\*/)?\s*$")
+
+
 def coverage(root, files, defs, exclude=(), strict=False):
     """How much code its design citations claim: per file, the non-blank
     lines inside declarations that some comment cites [T8], with tests
     counted apart, and files no parser reads reported as unmeasured.
     Strictly, only implementation and test citations cover code [T6]; a
-    project still adopting may count every mention."""
+    project still adopting may count every mention. Code a person exempts
+    as serving no design is counted apart again, as accounted for but not
+    covered [T15]."""
     cited = {}
     for d in defs.values():
         for c in d.citations:
@@ -503,14 +591,22 @@ def coverage(root, files, defs, exclude=(), strict=False):
         code = {n for n, l in enumerate(lines, 1) if l.strip()}
         row = {"path": f, "lines": len(code), "covered": 0, "test": spans_mod.is_test(f),
                "measured": lang is not None, "citations": len(cited.get(f, ()))}
-        if lang is not None and f in cited:
+        marks = [(n, m["reason"]) for n, l in enumerate(lines, 1)
+                 for m in [EXEMPT.search(l)] if m]
+        row["exempt"], row["exemptions"] = 0, [{"line": n, "reason": r} for n, r in marks]
+        if lang is not None and (f in cited or marks):
             decls = spans_mod.declarations(lang, text)
-            hit = set()
-            for line in cited[f]:
-                node = covered_node(decls, line)
-                if node:
-                    hit.update(range(node[0], node[1] + 1))
-            row["covered"] = len(hit & code)
+
+            def claimed(at):
+                hit = set()
+                for line in at:
+                    node = covered_node(decls, line)
+                    if node:
+                        hit.update(range(node[0], node[1] + 1))
+                return hit & code
+            hit = claimed(cited.get(f, ()))
+            row["covered"] = len(hit)
+            row["exempt"] = len(claimed(n for n, _ in marks) - hit)
         out.append(row)
     return out
 

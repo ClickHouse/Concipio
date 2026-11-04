@@ -210,6 +210,23 @@ def test_audit_scores_problems_and_reports_marked_debt(tmp_path):
     assert d["score"] > d["against"]["score"] and status == 1, "worse than HEAD fails"
 
 
+def test_adopting_a_check_is_not_a_regression_but_loosening_one_is(tmp_path):
+    import subprocess
+    lint_repo(tmp_path, {"README.md": "# Top\n\nThe legacy_gate and the legacy_gate.\n"})
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "a"],
+                   cwd=tmp_path, check=True)
+    (tmp_path / ".cpo").write_text('[retired]\nlegacy_gate = "gone"\n')
+    status, d = run_audit(tmp_path, "--against", "HEAD")
+    assert (d["score"], d["against"]["score"], d["against"]["own_config_score"], status) == \
+        (1, 1, 0, 0), "the old docs are scored under the new check too"
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "b"],
+                   cwd=tmp_path, check=True)
+    (tmp_path / ".cpo").write_text("")
+    status, d = run_audit(tmp_path, "--against", "HEAD")
+    assert (d["score"], status) == (0, 1), "dropping the check fails"
+
+
 def run_audit(tmp_path, *flags):
     import json, os, subprocess, sys
     out = subprocess.run([sys.executable, "-m", "concipio.cli", "audit", "--json", *flags],
@@ -257,6 +274,56 @@ def test_a_known_dangling_reference_survives_edits_that_move_it(tmp_path):
     assert run_lint(tmp_path, "--write-baseline")[0] == 0
     (tmp_path / "DESIGN.md").write_text("# Design\n\nNew text.\n\n## 1. One\n\nSee §9.\n")
     assert run_lint(tmp_path)[0] == 0
+
+
+def test_a_section_number_wrapped_away_from_its_doc_name_is_not_dangling(tmp_path):
+    lint_repo(tmp_path, {"README.md": "# Top\n\nSee [the design](DESIGN.md).\n",
+                         "DESIGN.md": "# Design\n\n## 1. One\n\nAs [NOTES\n"
+                                      "§9](NOTES.md) says, and as\n§8 does not.\n"},
+              cpo='[[source]]\ndoc = "DESIGN.md"\nprefix = "D"\n'
+                  "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\ncite = 'D\\s*§\\s*(?P<id>\\d+)'\n")
+    _, d = run_lint(tmp_path)
+    assert [p["key"] for p in d["problems"] if p["rule"] == "dangling-section"] == ["§8"]
+
+
+def test_exempt_code_is_accounted_for_apart_from_cited_code(tmp_path):
+    from concipio import docs, lint
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** Sum.\n",
+        "a.py": "# Implements [X§1]\ndef add(a, b):\n    return a + b\n\n\n"
+                "# CPO§exempt: argument plumbing\ndef parse(argv):\n    return argv[1:]\n\n\n"
+                "def odd():\n    return 1\n",
+    })
+    _, defs, _ = docs.load(root=tmp_path, files=docs.tracked_files(tmp_path))
+    [row] = [r for r in lint.coverage(tmp_path, ["a.py"], defs, strict=True)]
+    assert (row["covered"], row["exempt"]) == (2, 2)
+    assert row["exemptions"] == [{"line": 6, "reason": "argument plumbing"}]
+
+
+def test_hidden_headings_retired_terms_and_archives(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** The `legacy_gate` holds. See [old](old/a.md).\n\n"
+                     "> ### 1.1 Hidden\n\nText.\n",
+        "a.c": "// legacy_gate is gone\nint legacy_gate_count;\n",
+        "old/a.md": "# Old\n\n- **X§1:** The legacy_gate, verbatim. See [lost](../lost.md).\n",
+        "lost.md": "# Lost\n",
+    }, cpo='archive = ["old/*"]\n[retired]\nlegacy_gate = "the gate was removed"\n')
+    _, d = run_lint(tmp_path)
+    got = sorted((p["rule"], p["path"], p["key"]) for p in d["problems"])
+    assert got == [("heading-in-blockquote", "README.md", "1.1 Hidden"),
+                   ("orphan", "lost.md", "lost.md"),
+                   ("retired-term", "README.md", "legacy_gate"),
+                   ("retired-term", "a.c", "legacy_gate")], "the archive defines and reaches nothing"
+
+
+def test_a_retired_term_still_live_in_code_is_reported(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n",
+        "a.c": '#define QUEUE_MAX 8\n/* QUEUE_MAX */\nconst char *s = "legacy_gate";\n',
+    }, cpo='[retired]\nQUEUE_MAX = "unbounded now"\nlegacy_gate = "removed"\n')
+    _, d = run_lint(tmp_path)
+    live = [(p["key"], p["line"]) for p in d["problems"] if p["rule"] == "retired-term-live"]
+    assert live == [("QUEUE_MAX", 1)], "comments and strings are not live"
 
 
 def test_critical_statements_must_say_when_they_were_verified(tmp_path):

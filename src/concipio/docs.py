@@ -458,9 +458,19 @@ def doc_fields(text, pattern=None):
     return fields
 
 
+# Implements [CPO§T49]
+def archived(root, files):
+    """The files `.cpo` archives: kept verbatim, and read for nothing."""
+    import fnmatch
+    globs = config(root).get("archive", [])
+    return {f for f in files if any(fnmatch.fnmatch(f, g) for g in globs)}
+
+
 def load(start=".", root=None, files=None):
     root = root or repo_root(start)
     files = files if files is not None else tracked_files(root)
+    old = archived(root, files)
+    files = [f for f in files if f not in old]
     pattern = field_pattern(root)
     defs, errors = find_definitions(root, files, pattern)
     srcs = sources(root)

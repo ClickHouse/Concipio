@@ -136,6 +136,21 @@ overrides a default.
   status word such as "built", "settled", or "unscheduled", is reported. A
   design says what is true now; when it changed belongs in reports, and why
   in decisions with reasons [M47]. `.cpo` may change the list of words.
+- **CPO§T47:** A heading inside a blockquote, `> ### 5.1`, is reported in a
+  design doc. Concipio does not read it as a section, so its text counts
+  toward the section above it; it is almost always a section someone hid.
+- **CPO§T48:** `.cpo` may list retired terms, each with why it retired:
+  `[retired] legacy_gate = "the gate was removed"`. `cpo lint` reports each live
+  doc and code comment that still uses one, since a passage naming a removed
+  mechanism is likely to describe it as current. A passage that names it
+  only to say it is gone is recorded in the baseline [T40].
+  - **CPO§T50:** A retired term that code still defines or uses, outside
+    its comments and strings, is reported too. Either the mechanism is not
+    gone, or its retirement is unfinished.
+- **CPO§T49:** `.cpo` may name archive paths by glob, for old text kept
+  verbatim. An archived doc defines nothing, cites nothing, and is checked
+  by no rule; it is only a link target, and only links into it make it
+  reachable [M24].
 - **CPO§T34:** Projects that already use Doxygen's `\satisfies` and
   `\verifies`, or StrictDoc's `@relation`, can map those markers to
   Concipio's roles [T22] instead of adding a second set.
@@ -227,10 +242,15 @@ code from outside it.
 - **CPO§T15:** A comment containing `CPO§exempt:` and a reason covers its
   node without citing a statement. Exemptions satisfy the linter and appear
   in every report, counted. They are for code that truly serves no design
-  statement, not for helpers, which cite what they support [M7]. Unjustified
-  code [M7] never becomes exempt automatically; a person writes the reason,
-  and the linter flags an exemption added in the same change as the code it
-  exempts.
+  statement, such as plumbing, not for helpers, which cite what they
+  support [M7]. Unjustified code [M7] never becomes exempt automatically; a
+  person writes the reason, and the linter flags an exemption added in the
+  same change as the code it exempts.
+  - **CPO§T46:** Coverage counts exempt code apart from both covered code
+    and code nobody accounts for. An exemption says the code needs no
+    design, which a reviewer can check; an unjustified mark says nobody
+    has found one, which a reviewer should ask about. A project may aim to
+    account for all its code while citing only part of it.
 - **CPO§T16:** `.cpo` may exclude paths by glob. Excluded code is outside the
   check entirely, and the report says how much was excluded.
 

@@ -301,7 +301,9 @@ review teaches before any of them is built.
     failing it: every problem, counted by rule, and a total. With
     `--against` it compares another commit, and fails only if the total
     grew, so every commit can leave the docs a little better without having
-    to fix all of them. Debt a project has marked, such as stale docs and
+    to fix all of them. Both commits are scored under today's `.cpo`, so a
+    commit that adopts a new check is not a regression for the old problems
+    it finds; a commit that loosens the checks fails instead. Debt a project has marked, such as stale docs and
     postponed orphans, is reported beside the score, not in it, so that
     marking a problem never costs more than hiding it.
   - **CPO§M27:** Before creating a concept or design statement, an agent

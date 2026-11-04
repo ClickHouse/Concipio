@@ -393,6 +393,9 @@ def cmd_coverage(args, defs, repo):
     for label, rs in (("implementation", impl), ("tests", tests)):
         c, n = total(rs)
         lines.append(f"{label:15} {c:7} of {n:7} lines covered  {pct(c, n)}")
+        x = sum(r["exempt"] for r in rs)
+        if x:
+            lines.append(f"{'':15} {x:7} more exempt, {pct(c + x, n)} accounted for")
     un = [r for r in rows if not r["measured"]]
     if un:
         lines.append(f"{'unmeasured':15} {sum(r['lines'] for r in un):7} lines in {len(un)} "
@@ -405,8 +408,15 @@ def cmd_coverage(args, defs, repo):
     for key in sorted(groups, key=lambda k: -total(groups[k])[1]):
         c, n = total(groups[key])
         lines.append(f"  {pct(c, n)}  {c:7} / {n:<7} {key}")
-    emit({"implementation": dict(zip(("covered", "lines"), total(impl))),
-          "tests": dict(zip(("covered", "lines"), total(tests))),
+    marks = [(r["path"], e) for r in rows for e in r["exemptions"]]
+    if marks:
+        lines.append("")
+        lines.append(f"Exempt, as serving no design [T15]:")
+        lines += [f"  {path}:{e['line']}: {e['reason']}" for path, e in marks]
+    emit({"implementation": {**dict(zip(("covered", "lines"), total(impl))),
+                             "exempt": sum(r["exempt"] for r in impl)},
+          "tests": {**dict(zip(("covered", "lines"), total(tests))),
+                    "exempt": sum(r["exempt"] for r in tests)},
           "unmeasured": sum(r["lines"] for r in un), "files": rows},
          "\n".join(lines), args.json)
     return 0
@@ -424,16 +434,22 @@ def audit_at(repo, args, defs=None):
                 if r["measured"] and not r["test"]]
         n = sum(r["lines"] for r in rows)
         result["coverage"][key] = 100 * sum(r["covered"] for r in rows) / n if n else 0.0
+        if key == "strict":
+            done = sum(r["covered"] + r["exempt"] for r in rows)
+            result["coverage"]["accounted"] = 100 * done / n if n else 0.0
     return result
 
 
-def audit_rev(repo, rev, args):
-    """The audit of another commit, in a temporary worktree removed after."""
+def audit_rev(repo, rev, args, config=None):
+    """The audit of another commit, in a temporary worktree removed after,
+    under the given `.cpo` text or the commit's own."""
     import tempfile
     tmp = Path(tempfile.mkdtemp(prefix="cpo-audit-")) / "tree"
     subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(tmp), rev],
                    cwd=repo, check=True, capture_output=True)
     try:
+        if config is not None:
+            (tmp / ".cpo").write_text(config)
         return audit_at(tmp, args)
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(tmp)], cwd=repo,
@@ -442,12 +458,29 @@ def audit_rev(repo, rev, args):
 
 def cmd_audit(args, defs, repo):
     now = audit_at(repo, args, defs)
-    before = audit_rev(repo, args.against, args) if args.against else None
+    before = own = None
+    if args.against:
+        # The docs are compared under today's checks, so adopting a check
+        # is not a regression; the checks themselves are compared apart.
+        mine = repo / ".cpo"
+        config = mine.read_text() if mine.exists() else None
+        theirs = subprocess.run(["git", "show", f"{args.against}:.cpo"], cwd=repo,
+                                capture_output=True, text=True)
+        before = audit_rev(repo, args.against, args, config)
+        if config is not None and (theirs.returncode or theirs.stdout != config):
+            own = audit_rev(repo, args.against, args)
+
+    def delta(a, b):
+        return f"{'+' if a >= b else ''}{a - b}"
     rules = set(now["rules"]) | set(before["rules"] if before else [])
     lines = [f"Score {now['score']}" + (
-        f" (was {before['score']} at {args.against}, "
-        f"{'+' if now['score'] >= before['score'] else ''}{now['score'] - before['score']})"
+        f" (was {before['score']} at {args.against}, {delta(now['score'], before['score'])})"
         if before else "")]
+    if own:
+        tighter = before["score"] - own["score"]
+        lines.append(f"  .cpo changed since {args.against}, which scores {own['score']} under "
+                     f"its own: the checks are {'stricter' if tighter >= 0 else 'looser'} "
+                     f"by {abs(tighter)}" + ("" if tighter >= 0 else "; that fails the audit"))
     for c in [*lint_mod.STANDARDS, "other"]:
         mine = sorted(r for r in rules if lint_mod.standard_of(r) == c)
         if not mine and c == "other":
@@ -456,7 +489,8 @@ def cmd_audit(args, defs, repo):
         if c == "completeness":
             cov = now["coverage"]
             note = (f"  (implementation coverage {cov['any']:.1f}%, "
-                    f"{cov['strict']:.1f}% strictly)")
+                    f"{cov['strict']:.1f}% strictly, {cov['accounted']:.1f}% "
+                    "accounted for with exemptions)")
         lines.append(f"  {c.capitalize()}: {now['standards'].get(c, 0)}{note}")
         for r in mine:
             n = now["rules"].get(r, 0)
@@ -473,9 +507,12 @@ def cmd_audit(args, defs, repo):
             "coverage": now["coverage"], "debt": now["debt"],
             "problems": [asdict(p) for p in now["problems"]] if args.list else None}
     if before:
-        data["against"] = {"rev": args.against, "score": before["score"], "rules": before["rules"]}
+        data["against"] = {"rev": args.against, "score": before["score"], "rules": before["rules"],
+                           "own_config_score": own["score"] if own else before["score"]}
     emit(data, "\n".join(lines), args.json)
-    return 1 if before and now["score"] > before["score"] else 0
+    worse = before and now["score"] > before["score"]
+    looser = own and before["score"] < own["score"]
+    return 1 if worse or looser else 0
 
 
 def cmd_path(args, defs, repo):

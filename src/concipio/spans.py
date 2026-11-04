@@ -174,6 +174,27 @@ def declarations(lang, text):
     return found
 
 
+IDENTIFIER_NODES = {"identifier", "field_identifier", "type_identifier", "constant",
+                    "property_identifier"}
+
+
+def identifiers(lang, text):
+    """Every name the code itself uses, as (line, name), leaving out its
+    comments and strings."""
+    tree = Parser(LANGUAGES[lang]).parse(text.encode())
+    out = []
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type in IDENTIFIER_NODES or (
+                node.type == "word" and node.parent is not None
+                and node.parent.type == "command_name"):
+            out.append((node.start_point[0] + 1, node_text(node)))
+        elif "comment" not in node.type and "string" not in node.type:
+            stack.extend(node.children)
+    return out
+
+
 def scope_name(path, ancestors, kind=None, name=None):
     parts = []
     for k, n in ancestors + ([(kind, n)] if (kind and (n := name)) else []):

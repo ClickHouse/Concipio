@@ -97,12 +97,17 @@ overrides a default.
   [T6].
 
 ## Configurable syntax
-
 - **CPO§T22:** Each role's syntax is a regular expression in `.cpo`, in which
   `${TAG}` stands for any tag. A project may replace the defaults, for
   instance to use an ASCII sign in place of `§`, and may add roles of its own.
   Patterns use Python's syntax, which `grep -P` and `rg -P` also accept for
   ordinary patterns, so a person can run the same search Concipio does.
+- **CPO§T34:** Projects that already use Doxygen's `\satisfies` and
+  `\verifies`, or StrictDoc's `@relation`, can map those markers to
+  Concipio's roles [T22] instead of adding a second set.
+
+### Numbered sections
+
 - **CPO§T39:** A project whose design already numbers its sections need not
   retag them. `.cpo` can declare a doc whose numbered headings are
   definitions, with a prefix, a pattern for its headings, and a pattern for
@@ -110,6 +115,10 @@ overrides a default.
   its section, its nesting gives the tree, and the size rule measures it as
   a section [M41]. A repository that has not adopted Concipio keeps that
   `.cpo` in the store [T17].
+  - **CPO§T60:** A heading in a declared doc that looks numbered but
+    that its heading pattern does not read is reported. It defines no
+    section, so citations of it dangle in silence, which is worse than an
+    error.
 - **CPO§T41:** A bare section number, `§5c`, means section 5c of the doc it
   is written in, or of the doc linked just before it, as in
   "[the answers](answers.md), §5". Concipio finds any doc's numbered
@@ -117,12 +126,6 @@ overrides a default.
   in every doc. In a doc that defines tags by its numbered headings
   [T39], a resolved bare number is also a citation of the tag; elsewhere
   it is navigation only, since it names no tag.
-- **CPO§T42:** A statement, a section, or a whole doc may be marked stale
-  with a field that says why, `{Stale="the roster is now five reviewers"}`.
-  A whole doc carries it between its title and its first section, or in its
-  front matter. Marking staleness is cheaper than fixing it, and better than
-  leaving it unmarked, so a stale mark is reported as debt, not as a problem
-  [M50].
 - **CPO§T43:** In a doc that defines tags by its numbered headings [T39], a
   bare section number that names none of its sections is dangling, and
   `cpo lint` reports it. Other docs may number their own sections yet cite
@@ -132,6 +135,21 @@ overrides a default.
   `.cpo` with `bare_in_code = true` is what bare numbers mean in code, and a
   file can override that with a comment, `cpo-default: SPEC`, in its first
   lines, naming another source by prefix or path.
+  - **CPO§T62:** A section number in a comment that follows another doc's
+    name, `notes.md §10` or `ERRATA §3`, is that doc's,
+    and does not count toward the default's section. A doc is named by a
+    path, a Markdown file name, a declared prefix, or the name of one of
+    the project's docs. Comments are often written in capitals, so a
+    capitalized word alone does not name one.
+
+### Stale and retired text
+
+- **CPO§T42:** A statement, a section, or a whole doc may be marked stale
+  with a field that says why, `{Stale="the roster is now five reviewers"}`.
+  A whole doc carries it between its title and its first section, or in its
+  front matter. Marking staleness is cheaper than fixing it, and better than
+  leaving it unmarked, so a stale mark is reported as debt, not as a problem
+  [M50].
 - **CPO§T45:** A heading in a design doc that records history, a date or a
   status word such as "built", "settled", or "unscheduled", is reported. A
   design says what is true now; when it changed belongs in reports, and why
@@ -151,9 +169,6 @@ overrides a default.
   verbatim. An archived doc defines nothing, cites nothing, and is checked
   by no rule; it is only a link target, and only links into it make it
   reachable [M24].
-- **CPO§T34:** Projects that already use Doxygen's `\satisfies` and
-  `\verifies`, or StrictDoc's `@relation`, can map those markers to
-  Concipio's roles [T22] instead of adding a second set.
 
 ## Questions and checks
 
@@ -177,6 +192,11 @@ overrides a default.
   project can also postpone orphans by listing paths or globs under
   `postponed`; they are counted in every report but do not fail it, so a
   project can adopt Concipio before every old doc has a home.
+  - **CPO§T61:** The baseline records which Concipio wrote it. When lint
+    finds new problems and Concipio has changed since, it says so: a new
+    rule or a wider measure finds old problems, which a reviewer must not
+    mistake for growth. The project records the new measure in a commit
+    of its own, before the change, so each commit's growth is its own.
 
 ## Helpers and the rules they keep
 

@@ -296,9 +296,12 @@ def find_citations(root, files, defs):
 
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-# A section number as people write them: 5, 5.2, 5a, 5a‴, 4a-A, after an
-# optional § in the heading itself.
-SECTION_ID = r"\d+(?:\.\d+)*[a-z]?[′″‴]*(?:-[A-Z])?"
+# A section number as people write them: 5, 5.2, 5a, 5d.1, 5a‴, 4a-A, after
+# an optional § in the heading itself.
+SECTION_ID = r"\d+(?:\.\d+)*(?:[a-z](?:\.\d+)*)?[′″‴]*(?:-[A-Z])?"
+# A heading that starts with something like a section number, which a
+# source's own pattern may still fail to read [T60].
+LOOKS_NUMBERED = re.compile(r"^(#{2,6})\s+§?(\d+[\w.′″‴-]*?)\.?\s")
 NUMBERED = re.compile(rf"^#{{1,6}}\s+§?(?P<id>{SECTION_ID})\.?\s")
 BARE_SECTION = re.compile(rf"§\s*(?P<id>{SECTION_ID})")
 
@@ -400,7 +403,26 @@ def file_default(text, srcs):
     return None
 
 
+# Implements [CPO§T62]
+def names_a_doc_in_code(before, names):
+    """Whether a comment names a doc just before a bare section number, as
+    in `notes.md §10` or `ERRATA §3`: a path, a Markdown
+    file, a declared prefix, or the name of one of the project's docs. In
+    code a capitalized word proves nothing, since comments shout."""
+    words = before.replace("*/", " ").replace("/*", " ").replace("*", " ") \
+        .replace("//", " ").replace("#", " ").split()
+    if not words:
+        return False
+    word = words[-1].strip("([,;:`'\"")
+    return bool(word) and (bool(re.search(r"\w/\w", word)) or word.endswith(".md")
+                           or word in names)
+
+
 def source_citations(root, files, defs, srcs):
+    # The words that name a doc: each source's prefix, and each doc's name.
+    names = {src["prefix"] for src in srcs} | {
+        Path(f).stem for f in files if f.endswith(".md")} | {
+        Path(f).name for f in files if f.endswith(".md")}
     for path in files:
         try:
             text = (Path(root) / path).read_text()
@@ -409,7 +431,15 @@ def source_citations(root, files, defs, srcs):
         named = file_default(text, srcs) if not path.endswith(".md") else None
         lines = list(prose_lines(text)) if path.endswith(".md") else \
             list(enumerate(text.splitlines(), 1))
+        prev = ""
         for n, line in lines:
+            # A bare number that opens a line may have wrapped away from the
+            # doc name ending the line before.
+            def foreign(m, line=line, prev=prev):
+                before = line[:m.start()]
+                if not before.replace("*", "").replace("/", "").replace("#", "").strip():
+                    before = prev
+                return names_a_doc_in_code(before, names)
             for src in srcs:
                 patterns = [src["cite"]]
                 # In code, a bare §5c means the doc the file names, or else
@@ -426,11 +456,17 @@ def source_citations(root, files, defs, srcs):
                 for pattern in patterns:
                     for m in pattern.finditer(line):
                         tag = f"{src['prefix']}§{m['id']}"
+                        # In code, a number after another doc's name is that
+                        # doc's, and not the default's [T62].
+                        if pattern is BARE_SECTION and not path.endswith(".md") and \
+                                foreign(m):
+                            continue
                         if tag in defs and m.end() not in seen:
                             seen.add(m.end())
                             defs[tag].citations.append(Citation(
                                 path, n, role_before(line, m.start() - 1), line.strip(),
                                 m.start(), m.end()))
+            prev = line
 
 
 def doc_fields(text, pattern=None):

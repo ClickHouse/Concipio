@@ -4,6 +4,7 @@ claims no more code than a reader can hold."""
 import fnmatch
 import posixpath
 import re
+from pathlib import Path
 from dataclasses import dataclass
 
 from . import docs, spans as spans_mod
@@ -224,6 +225,7 @@ def check(root, files, defs, limits, cfg=None):
     problems += dangling_sections(root, files)
     problems += history_in_headings(root, files, defs, (cfg or {}).get("lint", {}).get("history_words"))
     problems += quoted_headings(root, defs)
+    problems += unread_headings(root, files)
     problems += retired_terms(root, files, (cfg or {}).get("retired", {}))
     lost, later = orphans(root, every, defs, limits["master"], limits["postponed"])
     for f in lost:
@@ -241,6 +243,18 @@ def check(root, files, defs, limits, cfg=None):
                     f"{b['regions']} regions; refine it so no point claims more than "
                     f"{limits['breadth_limit']}", tag, b["implementation"]))
     return sorted(problems, key=lambda p: (p.rule, p.path, p.line)), later
+
+
+# Implements [CPO§T61]
+def measure():
+    """Which Concipio measured: a digest of its own source, which changes
+    whenever a rule or a measure may have."""
+    import hashlib
+    here = Path(__file__).parent
+    h = hashlib.sha256()
+    for f in sorted(here.glob("*.py")):
+        h.update(f.name.encode() + b"\0" + f.read_bytes())
+    return h.hexdigest()[:12]
 
 
 def known(problem, baseline):
@@ -444,6 +458,25 @@ def dangling_sections(root, files):
 QUOTED_HEADING = re.compile(r"^\s{0,3}(?:>\s*)+(#{1,6})\s+(.*)$")
 
 
+# Implements [CPO§T60]
+def unread_headings(root, files):
+    """Headings in a declared source that look numbered but that the
+    source's heading pattern does not read, so define no section."""
+    out = []
+    for src in docs.sources(root):
+        if src["doc"] not in files:
+            continue
+        text = (root / src["doc"]).read_text(errors="replace")
+        for n, line in docs.prose_lines(text):
+            m = docs.LOOKS_NUMBERED.match(line)
+            if m and not src["heading"].search(line):
+                out.append(Problem(src["doc"], n, "unread-heading",
+                                   f'heading "{line.strip()[:70]}" looks numbered, but the '
+                                   f"{src['prefix']} heading pattern in .cpo does not read it, "
+                                   f"so §{m.group(2)} is defined nowhere", m.group(2), 1))
+    return out
+
+
 # Implements [CPO§T47]
 def quoted_headings(root, defs):
     """Headings hidden in blockquotes, in design docs: not sections, so
@@ -531,7 +564,7 @@ STANDARDS = {
     "correctness": ("dangling-section", "stale-updated", "schema", "undeclared-field",
                     "field-syntax", "unverified-critical", "stale-critical",
                     "history-in-heading", "retired-term",
-                    "retired-term-live"),
+                    "retired-term-live", "unread-heading"),
     "consumability": ("section-length", "statement-length", "breadth", "buried",
                       "heading-in-blockquote"),
 }

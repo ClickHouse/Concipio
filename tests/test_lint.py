@@ -470,3 +470,42 @@ def test_a_citation_atop_a_long_header_comment_covers_the_function(tmp_path):
     _, defs, _ = docs.load(root=tmp_path, files=files)
     [row] = lint.coverage(tmp_path, ["a.c"], defs, strict=True)
     assert row["covered"] == 3
+
+
+def test_a_numbered_heading_its_pattern_misses_is_reported(tmp_path):
+    lint_repo(tmp_path, {"README.md": "# Top\n\nSee [the design](DESIGN.md).\n",
+                         "DESIGN.md": "# Design\n\n## 5. Five\n\nText.\n\n"
+                                      "### 5d.1 Hidden\n\nMore.\n"},
+              cpo='[[source]]\ndoc = "DESIGN.md"\nprefix = "D"\n'
+                  "heading = '^#+\\s+(?P<id>\\d+)\\.\\s'\ncite = 'D\\s*§\\s*(?P<id>\\d+)'\n")
+    _, d = run_lint(tmp_path)
+    assert [(p["rule"], p["key"]) for p in d["problems"]] == [("unread-heading", "5d.1")]
+
+
+def test_lint_says_when_concipio_changed_since_the_baseline(tmp_path):
+    lint_repo(tmp_path, {"README.md": "# Top\n", "lost.md": "# Lost\n"})
+    assert run_lint(tmp_path, "--write-baseline")[0] == 0
+    base = tmp_path / ".cpo-baseline.toml"
+    base.write_text(base.read_text().replace("measure = ", 'measure = "old" #'))
+    (tmp_path / "also.md").write_text("# Also lost\n")
+    status, d = run_lint(tmp_path)
+    assert status == 1 and d["measure"]["baseline"] == "old"
+
+
+def test_a_section_number_after_another_docs_name_is_that_docs(tmp_path):
+    from concipio import docs
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md) and [notes](notes.md).\n",
+        "DESIGN.md": "# Design\n\n## 10. Sparse map\n\nText.\n",
+        "notes.md": "# Notes\n\n## 10. Temp partition\n\nText.\n",
+        "a.c": "/* notes.md §10: the temp partition */\nint a;\n"
+               "/* As notes §10 says */\nint b;\n"
+               "/* Per the restructure, docs/notes.md\n * §10 */\nint c;\n"
+               "/* SEE §10 */\nint d;\n/* §10: the sparse map */\nint e;\n"
+               "int f; /* a closed comment */\n/* §10 again */\nint g;\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\nprefix = "DESIGN"\nbare_in_code = true\n'
+           "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\n"
+           "cite = 'DESIGN\\s*§\\s*(?P<id>\\d+)'\n")
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    assert [c.line for c in defs["DESIGN§10"].citations if c.path == "a.c"] == [8, 10, 13]

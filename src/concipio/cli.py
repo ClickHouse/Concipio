@@ -696,17 +696,26 @@ def cmd_lint(args, defs, repo):
     if args.write_baseline:
         base_file.write_text("# Problems known when the baseline was written. cpo lint fails\n"
                              "# only on problems that are new, or worse than recorded here.\n\n"
-                             + tomli_w.dumps({"problem": [
+                             + tomli_w.dumps({"measure": lint_mod.measure(), "problem": [
                                  {"rule": p.rule, "path": p.path, "key": p.key, "value": p.value}
                                  for p in problems]}))
         emit({"baseline": str(base_file), "problems": len(problems)},
              f"Recorded {len(problems)} problems in {base_file}.", args.json)
         return 0
-    baseline = (tomllib.loads(base_file.read_text()).get("problem", [])
-                if base_file.exists() else [])
+    recorded = tomllib.loads(base_file.read_text()) if base_file.exists() else {}
+    baseline = recorded.get("problem", [])
     fresh = [p for p in problems if not lint_mod.known(p, baseline)]
     shown = problems if args.all else fresh
     lines = [f"{p.path}:{p.line}: {p.rule}: {p.message}" for p in shown]
+    # New problems after Concipio itself changed may come from a new rule
+    # or a changed measure rather than from the docs or code [T61].
+    then, now = recorded.get("measure"), lint_mod.measure()
+    if fresh and baseline and then != now:
+        lines.append(f"Concipio has changed since the baseline was written ({then or 'unrecorded'}"
+                     f" -> {now}), so some of these {len(fresh)} may come from its rules, not "
+                     "from this change. Re-record the baseline in a commit of its own, "
+                     "before this change: stash the change, run cpo lint --write-baseline, "
+                     "commit the baseline alone, and unstash.")
     if baseline:
         lines.append(f"{len(problems) - len(fresh)} known problems recorded in the baseline"
                      + (", shown" if args.all else ", not shown"))
@@ -715,7 +724,8 @@ def cmd_lint(args, defs, repo):
     if not problems:
         lines.insert(0, "Every design fits on a screen, reaches the master, and claims "
                         "no more code than its limit.")
-    emit({"problems": [asdict(p) for p in shown], "new": len(fresh), "known":
+    emit({"problems": [asdict(p) for p in shown], "new": len(fresh),
+          "measure": {"baseline": then, "now": now}, "known":
           len(problems) - len(fresh), "postponed_orphans": later, "limits": limits},
          "\n".join(lines), args.json)
     return 1 if fresh else 0

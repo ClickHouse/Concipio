@@ -178,6 +178,59 @@ overrides a default.
   `postponed`; they are counted in every report but do not fail it, so a
   project can adopt Concipio before every old doc has a home.
 
+## Helpers and the rules they keep
+
+Code no design claims still says what it serves, through its callers, and
+what rules it keeps, through its guards and their comments.
+
+- **CPO§T51:** `cpo helpers` sorts the functions no citation covers by the
+  design they serve: the design points cited by the nearest code that calls
+  them. A helper serving one point should cite it [M7].
+  - **CPO§T57:** The report groups helpers by what they serve. One serving
+    many points is shared infrastructure, or a mechanism that deserves its
+    own point. One that only uncited code, only tests, or nothing calls is
+    reported as such, and so is one named only outside any function, as a
+    callback in a table is.
+  - **CPO§T52:** Beside the taxonomy, `cpo helpers` clusters helpers that
+    may duplicate one another: the same body, the same top-level name in
+    different files, or mostly the same calls, weighing a rare call above a
+    common one. These are candidates for a person or an agent to judge, not
+    findings. Code that says the same thing in other words needs a model to
+    find, which Concipio leaves to the agent.
+  - **CPO§T53:** For each cluster, `cpo helpers` lists what the copies do
+    not share: the calls and fields only some of them use, by which copies
+    use them. Copies that drifted apart, one asserting a guard another
+    lacks, are where duplication hides bugs, so a reviewer reads this
+    list as a checklist.
+    - **CPO§T55:** Each difference is labelled by the role it plays in the
+      copy that has it: a guard, a condition that returns early or an
+      assertion; an output, a write through a pointer parameter; a
+      signature difference, a use of a parameter no other copy has; or
+      body. Guards come first, since a guard one copy lacks can be a bug,
+      while an output or a parameter explains a difference without drift.
+      A guard over a parameter only one copy takes is still a guard, marked
+      as depending on the signature, since it may be drift all the same.
+    - **CPO§T56:** Clusters take in cited functions too, each shown with
+      what it cites. A difference in a copy that cites the design is
+      likely intended, and one in a copy that cites nothing is the one to
+      ask about. A copy that cites nothing but calls a function that
+      does is shown with that call, since the rule it keeps is likely
+      the callee's.
+  - **CPO§T54:** Function-like macros stay in the call graph, so a guard
+    written as a macro shows among the differences, but are listed as
+    helpers only on request.
+- **CPO§T58:** `cpo unwritten` lists the guards, early returns and
+  assertions, in code citing no design, whose comment says why they exist.
+  Such a comment is a design rule someone found, often through a bug, and
+  wrote down only where it is enforced. A comment naming an incident, a
+  date, a bug, an issue, or a commit, is the surest sign, so those are
+  listed by default; `.cpo` may add patterns of its own, such as its bug
+  tags, under `[unwritten] incident`.
+  - **CPO§T59:** A guard that calls a predicate, `if (!ours(n)) return`,
+    may keep its reason in the predicate's header comment rather than its
+    own. When that header names an incident and the predicate cites no
+    design, the guard is reported with the header as its evidence, and a
+    predicate many guards call is reported once, with all of them.
 ## Views of code
 
 - **CPO§T25:** Design docs do not store links to the code that implements

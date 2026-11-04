@@ -152,6 +152,17 @@ def build_parser():
                     help="count only Implements and Tests citations, not mentions")
     cv.add_argument("--by", choices=["dir", "file"], default="dir",
                     help="group by top-level directory (default) or list every file")
+    he = add("helpers", "sort the helpers no citation covers by the design they serve")
+    he.add_argument("paths", nargs="*", help="limit to these files or directories")
+    he.add_argument("--limit", type=int, default=10,
+                    help="helpers to list per group, largest first; 0 lists all (default 10)")
+    he.add_argument("--counts", action="store_true", help="only count each group")
+    he.add_argument("--macros", action="store_true",
+                    help="list function-like macros as helpers too")
+    un = add("unwritten", "find guards whose comments state a rule no design records")
+    un.add_argument("paths", nargs="*", help="limit to these files or directories")
+    un.add_argument("--all", action="store_true",
+                    help="any guard with an explaining comment, not only those naming an incident")
     pa = add("path", "show the chain of links from the master to a doc or tag")
     pa.add_argument("target", help="a doc's path, a tag, or an ID")
     tree = add("tree", "show how statements refine one another")
@@ -289,6 +300,10 @@ def dispatch(args):
         print(f"cpo: {e}", file=sys.stderr)
     if args.command == "coverage":
         status = cmd_coverage(args, defs, repo)
+    elif args.command == "helpers":
+        status = cmd_helpers(args, defs, repo)
+    elif args.command == "unwritten":
+        status = cmd_unwritten(args, defs, repo)
     elif args.command == "audit":
         status = cmd_audit(args, defs, repo)
     elif args.command == "path":
@@ -371,11 +386,17 @@ def cmd_brief(args, defs, repo):
     return 0
 
 
+def under(repo, files, paths):
+    """The files at or below the given paths, or all of them."""
+    if not paths:
+        return files
+    want = [str(Path(p).resolve().relative_to(repo)).rstrip("/") for p in paths]
+    return [f for f in files if any(f == w or f.startswith(w + "/") for w in want)]
+
+
 def cmd_coverage(args, defs, repo):
     files = docs.tracked_files(repo)
-    if args.paths:
-        want = [str(Path(p).resolve().relative_to(repo)).rstrip("/") for p in args.paths]
-        files = [f for f in files if any(f == w or f.startswith(w + "/") for w in want)]
+    files = under(repo, files, args.paths)
     rows = lint_mod.coverage(repo, files, defs, docs.config(repo).get("exclude", []),
                              strict=args.strict)
 
@@ -422,6 +443,103 @@ def cmd_coverage(args, defs, repo):
     return 0
 
 
+# Implements [CPO§T58]
+def cmd_unwritten(args, defs, repo):
+    from . import helpers
+    cfg = docs.config(repo)
+    files = under(repo, docs.tracked_files(repo), args.paths)
+    rows = helpers.unwritten_rules(repo, files, defs, cfg.get("exclude", []),
+                                   cfg.get("unwritten", {}).get("incident", []), args.all)
+    lines = [f"{len(rows)} rules, kept by guards in code citing no design, are explained by "
+             "a comment" + ("" if args.all else " that names an incident") + "."]
+    for r in rows:
+        mark = f"  [{', '.join(r['markers'])}]" if r["markers"] else ""
+        text = r["comment"] if len(r["comment"]) <= 160 else r["comment"][:157] + "..."
+        lines += ["", f"{r['path']}:{r['line']} {r['function']}{mark}",
+                  f"  {r['guard'][:100]}"]
+        if r["evidence"]:
+            lines.append(f"  The predicate's header says why, at {r['evidence']}:")
+        lines.append(f"  {text}")
+        if r["also"]:
+            lines.append(f"  Guards relying on it too: {', '.join(r['also'])}")
+    if rows:
+        lines += ["", "Each states a rule the code enforces. Write it into the design, "
+                  "and cite it from here."]
+    emit({"guards": rows}, "\n".join(lines), args.json)
+    return 0
+
+
+# Implements [CPO§T57]
+def cmd_helpers(args, defs, repo):
+    from . import helpers
+    # Callers outside the paths asked about still count, so the whole
+    # repository is read and only the report is narrowed.
+    files = docs.tracked_files(repo)
+    rows, alike = helpers.taxonomy(repo, files, defs, docs.config(repo).get("exclude", []),
+                                   macros=args.macros)
+    if args.paths:
+        mine = set(under(repo, files, args.paths))
+        rows = [r for r in rows if r["path"] in mine]
+        alike = [a for a in alike
+                 if any(h.split(":", 1)[0] in mine for h in a["helpers"])]
+    groups = {}
+    for r in rows:
+        if len(r["serves"]) >= 4:
+            label = (1, "Serving four or more design points: shared infrastructure, "
+                        "or a mechanism awaiting its own citation")
+        elif r["serves"]:
+            label = (0, "Serving " + r["serves"][0])
+        elif r["callers"]:
+            label = (2, "Called only by code nothing cites")
+        elif r["tested"]:
+            label = (3, "Called only by tests")
+        elif r["outer"]:
+            label = (4, "Named only outside any function: callbacks, tables, entry points")
+        else:
+            label = (5, "Called by nothing Concipio can see: dead, or called indirectly")
+        groups.setdefault(label, []).append(r)
+    lines = [f"{len(rows)} helpers no citation covers, in "
+             f"{len({r['path'] for r in rows})} files."]
+    limit = args.limit or None
+    order = sorted(groups, key=lambda g: (g[0], -len(groups[g]), g[1]))
+    for label in order:
+        rs, label = groups[label], label[1]
+        cut = "" if args.counts else ":" if not limit or len(rs) <= limit else \
+            f", {limit} largest:"
+        lines += ([] if args.counts else [""]) + [
+            f"{label} ({len(rs)}, {sum(r['lines'] for r in rs)} lines){cut}"]
+        if args.counts:
+            continue
+        for r in sorted(rs, key=lambda r: -r["lines"])[:limit]:
+            far = f", {r['hops']} calls away" if r["hops"] and r["hops"] > 1 else ""
+            also = f", also {', '.join(r['serves'][1:])}" if 1 < len(r["serves"]) < 4 else ""
+            lines.append(f"  {r['path']}:{r['line']} {r['name']} ({r['lines']} lines{far}{also})")
+    if alike:
+        lines += ([] if args.counts else [""]) + [
+            f"Look alike, so may duplicate one another ({len(alike)} clusters, "
+            f"{sum(a['lines'] for a in alike)} lines)" + ("" if args.counts else ":")]
+        for a in [] if args.counts else alike[:limit and limit * 2]:
+            lines.append(f"  {a['lines']} lines with {' and '.join(a['why'])}:")
+            lines += [f"    {h}" for h in a["helpers"]]
+            if a["differ"]:
+                lines.append("    They differ:")
+                lines += [f"      {d['role']:17} {d['where']}: {', '.join(d['names'])}"
+                          for d in a["differ"]]
+        if not args.counts and any(a["differ"] for a in alike):
+            lines += ["", "Roles are read from the syntax of each copy: a check made inside a "
+                      "callee shows as body,", "so body never proves a check is absent."]
+    if args.counts:
+        data = {"helpers": len(rows),
+                "groups": [{"group": g[1], "helpers": len(groups[g]),
+                            "lines": sum(r["lines"] for r in groups[g])} for g in order],
+                "look_alikes": {"clusters": len(alike),
+                                "lines": sum(a["lines"] for a in alike)}}
+    else:
+        data = {"helpers": rows, "look_alikes": alike}
+    emit(data, "\n".join(lines), args.json)
+    return 0
+
+
 def audit_at(repo, args, defs=None):
     files = docs.tracked_files(repo)
     if defs is None:
@@ -440,6 +558,7 @@ def audit_at(repo, args, defs=None):
     return result
 
 
+# Implements [CPO§M50]
 def audit_rev(repo, rev, args, config=None):
     """The audit of another commit, in a temporary worktree removed after,
     under the given `.cpo` text or the commit's own."""
@@ -570,12 +689,7 @@ def cmd_lint(args, defs, repo):
     import tomli_w
     files = docs.tracked_files(repo)
     limits = lint_limits(repo, args)
-    if args.paths:
-        want = [str(Path(p).resolve().relative_to(repo)) for p in args.paths]
-        files_in = [f for f in files if any(f == w or f.startswith(w.rstrip("/") + "/")
-                                            for w in want)]
-    else:
-        files_in = files
+    files_in = under(repo, files, args.paths)
     problems, later = lint_mod.check(repo, files, defs, limits, docs.config(repo))
     problems = [p for p in problems if p.path in files_in]
     base_file = baseline_path(repo)

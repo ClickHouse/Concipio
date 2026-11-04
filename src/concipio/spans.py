@@ -1,5 +1,6 @@
 """Find the spans a change touches."""
 
+import functools
 import re
 import subprocess
 from dataclasses import dataclass
@@ -174,22 +175,57 @@ def declarations(lang, text):
     return found
 
 
+# Inside a parse error, a keyword before a parenthesis looks like a call.
+KEYWORDS = {"if", "for", "while", "switch", "return", "sizeof", "do", "case", "elif",
+            "until", "unless", "typeof", "__typeof__", "defined"}
 IDENTIFIER_NODES = {"identifier", "field_identifier", "type_identifier", "constant",
                     "property_identifier"}
 
 
-def identifiers(lang, text):
+# Implements [CPO§T50]
+def called(node):
+    """Whether an identifier names what a call calls: `f` in `f(x)` and
+    `o.f(x)`, or a shell command."""
+    parent = node.parent
+    if parent is None:
+        return False
+    if parent.type == "attribute" and parent.child_by_field_name("attribute") == node:
+        node, parent = parent, parent.parent
+        if parent is None:
+            return False
+    if parent.type in ("call_expression", "call"):
+        target = parent.child_by_field_name("function") or parent.child_by_field_name("method")
+        return target == node
+    return parent.type == "command_name"
+
+
+def identifiers(lang, text, fields=None, calls=None):
     """Every name the code itself uses, as (line, name), leaving out its
-    comments and strings."""
-    tree = Parser(LANGUAGES[lang]).parse(text.encode())
+    comments and strings. Names that are a struct's fields, as in
+    `node->parent`, are also added to `fields`, and names that are called
+    to `calls`, both as (line, name)."""
+    source = text.encode()
+    tree = Parser(LANGUAGES[lang]).parse(source)
     out = []
     stack = [tree.root_node]
+
+    def calling(node):
+        # A kernel iterator macro, `for_each_possible_cpu(cpu)` with no
+        # braces after it, parses as an error, not a call; a name followed
+        # by a parenthesis is called all the same.
+        return called(node) or (node_text(node) not in KEYWORDS and source[
+            node.end_byte:node.end_byte + 64].lstrip()[:1] == b"(")
     while stack:
         node = stack.pop()
         if node.type in IDENTIFIER_NODES or (
                 node.type == "word" and node.parent is not None
                 and node.parent.type == "command_name"):
             out.append((node.start_point[0] + 1, node_text(node)))
+            if fields is not None and node.type in ("field_identifier", "property_identifier") \
+                    and not calling(node):
+                fields.append(out[-1])
+            if calls is not None and calling(node):
+                calls.append(out[-1])
         elif "comment" not in node.type and "string" not in node.type:
             stack.extend(node.children)
     return out
@@ -351,3 +387,189 @@ def find_spans(repo, base, head, limit=DEFAULT_LIMIT):
             merged.append(item)
     return [Span(f"S{i}", p, side, s, e, scope, kind, q, is_test(p))
             for i, (p, side, s, e, kind, scope, q) in enumerate(merged, 1)]
+
+
+ASSERTS = re.compile(r"assert|BUG_ON|WARN_ON|BUILD_BUG|CHECK|ensure|must", re.I)
+EXITS = {"return_statement", "goto_statement", "break_statement", "continue_statement",
+         "return", "raise_statement", "raise", "break", "next"}
+STATEMENT = re.compile(r"(_statement|^assignment|^call)$")
+
+
+@functools.lru_cache(maxsize=32)
+def parse(lang, text):
+    """A parse tree, kept for the few files a report asks about again."""
+    return Parser(LANGUAGES[lang]).parse(text.encode())
+
+
+ROLES = ["guard", "guard (signature)", "body", "output", "signature"]
+
+
+def function_node(tree, line):
+    """The function or method that starts on a line."""
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.start_point[0] + 1 == line and node.type in (
+                "function_definition", "method", "singleton_method", "preproc_function_def"):
+            return node
+        if node.start_point[0] + 1 <= line <= node.end_point[0] + 1:
+            stack.extend(node.children)
+    return None
+
+
+def parameters(node):
+    """A function's parameters, {name: type}: a C parameter's type is its
+    declaration without the name, and other languages' are their names."""
+    plist = None
+    stack = [node]
+    while stack and plist is None:
+        n = stack.pop(0)
+        if n.type in ("parameter_list", "parameters", "method_parameters"):
+            plist = n
+        elif n.type != "compound_statement" and n.type != "block":
+            stack.extend(n.children)
+    out = {}
+    for p in plist.named_children if plist else ():
+        if p.type == "parameter_declaration":
+            name = declarator_name(p.child_by_field_name("declarator"))
+            if name:
+                out[name] = " ".join(node_text(p).replace(name, "").split())
+        else:
+            name = node_text(p).split("=")[0].strip(" *&:")
+            out[name] = name
+    return out
+
+
+def roles(lang, text, line, unique):
+    """What each call and field in the function on a line does, by name
+    (fields as `->name`): a guard, an output through a pointer parameter,
+    a use of a parameter only this copy has (`unique`), or body. A name
+    used several ways takes the role most likely to be a bug."""
+    fn = function_node(parse(lang, text), line)
+    if fn is None:
+        return {}
+    params = set(parameters(fn))
+    source = text.encode()
+
+    def names_in(node):
+        out, stack = set(), [node]
+        while stack:
+            n = stack.pop()
+            if n.type == "identifier":
+                out.add(node_text(n))
+            stack.extend(n.children)
+        return out
+
+    def role(node):
+        n, conds = node, set()
+        while n is not None and n != fn:
+            p = n.parent
+            if p is None:
+                break
+            if p.type in ("assignment_expression", "assignment") and \
+                    (left := p.child_by_field_name("left")) is not None and \
+                    left.type == "pointer_expression" and names_in(left) & params:
+                return "output"
+            if p.type in ("if_statement", "if", "unless"):
+                cond = p.child_by_field_name("condition")
+                if cond is not None:
+                    conds |= names_in(cond)
+                    if cond.start_byte <= node.start_byte < cond.end_byte and any(
+                            c.type in EXITS for c in walk_types(p, cond)):
+                        return "guard (signature)" if names_in(cond) & unique else "guard"
+            # A check over a parameter only this copy takes may still be
+            # drift, so it stays a guard, marked as such.
+            if p.type in ("call_expression", "call") and ASSERTS.search(
+                    node_text(p.child_by_field_name("function")
+                              or p.child_by_field_name("method") or p)[:40]):
+                return "guard (signature)" if names_in(p) & unique else "guard"
+            if p.type == "assert_statement":
+                return "guard (signature)" if names_in(p) & unique else "guard"
+            if STATEMENT.search(p.type) and names_in(p) & unique:
+                return "signature"
+            n = p
+        return "signature" if conds & unique else "body"
+
+    rank = {r: i for i, r in enumerate(ROLES)}
+    out = {}
+    stack = [fn.child_by_field_name("body") or fn]
+    while stack:
+        node = stack.pop()
+        if node.type in IDENTIFIER_NODES:
+            after = node_text(node) not in KEYWORDS and \
+                source[node.end_byte:node.end_byte + 64].lstrip()[:1] == b"("
+            if called(node) or after:
+                name = node_text(node)
+            elif node.type in ("field_identifier", "property_identifier"):
+                name = "->" + node_text(node)
+            else:
+                continue
+            r = role(node)
+            if name not in out or rank[r] < rank[out[name]]:
+                out[name] = r
+        elif "comment" not in node.type and "string" not in node.type:
+            stack.extend(node.children)
+    return out
+
+
+def walk_types(node, skip):
+    """The descendants of a node, leaving out one subtree."""
+    stack = [c for c in node.children if c != skip]
+    while stack:
+        n = stack.pop()
+        yield n
+        stack.extend(n.children)
+
+
+def guards_and_comments(lang, text, line):
+    """In the function on a line: its guards, as (first line, last line,
+    names the check calls), for conditions that leave early and
+    assertions; and its comments, as (first line, last line, text)."""
+    fn = function_node(parse(lang, text), line)
+    if fn is None:
+        return [], []
+    guards, comments = [], []
+    stack = [fn]
+    while stack:
+        node = stack.pop()
+        rows = (node.start_point[0] + 1, node.end_point[0] + 1)
+        if "comment" in node.type:
+            comments.append((*rows, node_text(node)))
+            continue
+        if node.type in ("if_statement", "if", "unless"):
+            cond = node.child_by_field_name("condition")
+            if cond is not None and any(c.type in EXITS for c in walk_types(node, cond)):
+                guards.append((*rows, calls_in(cond)))
+        elif node.type == "assert_statement" or (
+                node.type == "expression_statement" and node.named_children and
+                node.named_children[0].type in ("call_expression", "call") and
+                ASSERTS.search(node_text(node.named_children[0])[:40].split("(")[0])):
+            guards.append((*rows, calls_in(node)))
+        stack.extend(node.children)
+    return sorted(guards), sorted(comments)
+
+
+def calls_in(node):
+    """The names a piece of code calls."""
+    out, stack = set(), [node]
+    while stack:
+        n = stack.pop()
+        if n.type in IDENTIFIER_NODES and called(n):
+            out.add(node_text(n))
+        stack.extend(n.children)
+    return out
+
+
+# A line inside a comment block, in the languages Concipio parses.
+COMMENT_LINE = re.compile(r"^\s*(/\*|\*|//|#(?!\s*(define|include|if|endif|else)))|\*/\s*$")
+
+
+def header_comment(text, line):
+    """The comment block just above a declaration, as text."""
+    lines = text.splitlines()
+    out = []
+    n = line - 2
+    while n >= 0 and COMMENT_LINE.search(lines[n]):
+        out.append(lines[n])
+        n -= 1
+    return "\n".join(reversed(out))

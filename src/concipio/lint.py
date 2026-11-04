@@ -166,13 +166,18 @@ def orphans(root, files, defs, master="README.md", postponed=()):
     return [f for f in lost if f not in later], later
 
 
-def covered_node(decls, line):
+def covered_node(decls, line, lines=None):
     """The declaration a citation on this line documents: the innermost one
     around it, or the one that starts just below it, as a comment above a
-    function documents that function [T8]."""
+    function documents that function [T8]. Given the file's lines, a
+    citation anywhere in a comment block documents what follows the block,
+    however long the block runs."""
     inside = [d for d in decls if d[0] <= line <= d[1] and not d[2].endswith("scope")]
     if inside:
         return min(inside, key=lambda d: d[1] - d[0])
+    if lines:
+        while line < len(lines) and spans_mod.COMMENT_LINE.search(lines[line]):
+            line += 1
     below = [d for d in decls if line < d[0] <= line + 3 and not d[2].endswith("scope")]
     return min(below, key=lambda d: d[0]) if below else None
 
@@ -191,11 +196,12 @@ def breadth(root, defs):
                 try:
                     text = (root / c.path).read_text(errors="replace")
                 except (FileNotFoundError, IsADirectoryError):
-                    cache[c.path] = []
+                    cache[c.path] = ([], [])
                     continue
                 lang = spans_mod.language_of(c.path, text)
-                cache[c.path] = spans_mod.declarations(lang, text) if lang else []
-            node = covered_node(cache[c.path], c.line)
+                cache[c.path] = (spans_mod.declarations(lang, text) if lang else [],
+                                 text.splitlines())
+            node = covered_node(*cache[c.path][:1], c.line, cache[c.path][1])
             key = (c.path, node[0], node[1]) if node else (c.path, c.line, c.line)
             if key in nodes:
                 continue
@@ -600,7 +606,7 @@ def coverage(root, files, defs, exclude=(), strict=False):
             def claimed(at):
                 hit = set()
                 for line in at:
-                    node = covered_node(decls, line)
+                    node = covered_node(decls, line, lines)
                     if node:
                         hit.update(range(node[0], node[1] + 1))
                 return hit & code

@@ -99,6 +99,12 @@ fits on a screen, and what matters most stays near the top). The commands:
   `cpo lint --write-baseline`. Never rewrite it to hide a new problem.
 - `cpo coverage` shows how much code the design's citations claim, by
   directory. `--strict` counts only `Implements` and `Tests` citations.
+- `cpo helpers` sorts the uncited functions by the design points their
+  callers serve, and lists look-alikes that may duplicate one another. Cite
+  a helper's point, merge real duplicates, and give shared infrastructure
+  a point of its own.
+- `cpo unwritten` lists guards whose comments name an incident, in code
+  citing no design. Each is a rule to write into the design and cite.
 - `cpo path <doc or tag>` shows how a doc is reached from the master;
   `cpo show <tag>` shows a statement and everything citing it; `cpo brief`
   prints what nobody may lose.

@@ -353,3 +353,120 @@ def test_a_critical_statement_can_be_known_stale(tmp_path):
     lint_repo(tmp_path, {"README.md": '# Top\n\n- **X§1:** Write order. {Importance=critical Stale="rewrite pending"}\n'})
     _, d = run_lint(tmp_path)
     assert [p["rule"] for p in d["problems"]] == ["stale-critical"]
+
+
+def test_helpers_are_sorted_by_the_design_their_callers_serve(tmp_path):
+    from concipio import docs, helpers
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** Do it.\n",
+        "a.c": "static int twice(int x) {\n  return x + x;\n}\n\n"
+               "static int again(int x) {\n  return x + x;\n}\n\n"
+               "// Implements [X§1]\nint run(void) {\n  return twice(1);\n}\n\n"
+               "static int probe(void) {\n  return 0;\n}\n\n"
+               "static int on_load(void) {\n  return 1;\n}\n\n"
+               "static int unused(void) {\n  return 2;\n}\n\n"
+               "struct ops { int (*load)(void); } ops = { .load = on_load };\n",
+        "test/test_a.c": "int check(void) {\n  return probe();\n}\n",
+    })
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    rows, alike = helpers.taxonomy(tmp_path, files, defs)
+    got = {r["name"]: (r["serves"], r["callers"], r["tested"], r["outer"]) for r in rows}
+    assert got == {"twice": (["X§1"], 1, False, False), "again": ([], 0, False, False),
+                   "probe": ([], 0, True, False), "on_load": ([], 0, False, True),
+                   "unused": ([], 0, False, False)}
+    assert [a["helpers"] for a in alike if "the same body" in a["why"]] == [
+        ["a.c:1 twice", "a.c:5 again"]]
+
+
+def test_look_alikes_list_what_their_copies_do_not_share(tmp_path):
+    from concipio import docs, helpers
+    body = "  lock(n);\n  unlink(n);\n  push_free(n);\n  unlock(n);\n"
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n",
+        "a.c": "#define ASSERT(x) do { } while (0)\n\n"
+               "void release_buffer(struct node *n) {\n  ASSERT(n->parent);\n" + body + "}\n\n"
+               "void release_page(struct node *n) {\n" + body + "  n->coverage = 0;\n}\n",
+    })
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    rows, alike = helpers.taxonomy(tmp_path, files, defs)
+    assert "ASSERT" not in {r["name"] for r in rows}, "macros are not listed as helpers"
+    [cluster] = alike
+    assert cluster["differ"] == [
+        {"where": "only in release_buffer", "role": "guard", "names": ["->parent", "ASSERT"]},
+        {"where": "only in release_page", "role": "body", "names": ["->coverage"]}]
+
+
+def test_differences_explained_by_an_output_or_a_parameter_rank_below_guards(tmp_path):
+    from concipio import docs, helpers
+    body = "".join(f"  step{i}(n);\n" for i in range(8))
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n",
+        "a.c": "void claim(struct node *n) {\n" + body + "}\n\n"
+               "void claim_member(struct node *n, struct node **parent) {\n" + body +
+               "  if (parent) *parent = n->parent;\n}\n\n"
+               "void claim_ends(struct node *n, struct ends *e) {\n" + body +
+               "  ASSERT(ends_ok(e));\n}\n\n"
+               "void claim_checked(struct node *n) {\n  if (!mine(n)) return;\n" + body + "}\n",
+    })
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    _, [cluster] = helpers.taxonomy(tmp_path, files, defs)
+    assert [(d["role"], d["names"]) for d in cluster["differ"]] == [
+        ("guard", ["mine"]), ("guard (signature)", ["ASSERT", "ends_ok"]),
+        ("output", ["->parent"])]
+
+
+def test_a_call_inside_an_unparsed_iterator_macro_still_counts():
+    from concipio import spans
+    calls = []
+    spans.identifiers("c", "static int total(struct s *s)\n{\n\tint n = 0, cpu;\n"
+                      "\tfor_each_possible_cpu(cpu)\n\t\tn += READ_ONCE(s->v);\n"
+                      "\treturn n;\n}\n", [], calls)
+    assert {"for_each_possible_cpu", "READ_ONCE"} <= {n for _, n in calls}
+
+
+def test_guards_whose_comments_name_an_incident_are_unwritten_rules(tmp_path):
+    from concipio import docs, helpers
+    guard = ("  /* Re-check the owner under the head lock: skipping it lost\n"
+             "   * a write (tk-12, 2026-08-03). */\n  if (!ours(n))\n    return;\n")
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** Owners are re-checked.\n",
+        "a.c": "void loose(struct n *n) {\n" + guard + "  go(n);\n}\n\n"
+               "// Implements [X§1]\nvoid cited(struct n *n) {\n" + guard + "  go(n);\n}\n\n"
+               "void plain(struct n *n) {\n  /* nothing to do */\n  if (!n)\n    return;\n}\n",
+    }, cpo='[unwritten]\nincident = ["tk-\\\\d+"]\n')
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    rows = helpers.unwritten_rules(tmp_path, files, defs, incident=[r"tk-\d+"])
+    assert [(r["function"], r["line"], r["markers"]) for r in rows] == [
+        ("loose", 4, ["2026-08-03", "tk-12"])]
+
+
+def test_a_guard_may_take_its_reason_from_its_predicates_header(tmp_path):
+    from concipio import docs, helpers
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n",
+        "a.c": "/* Whether the page is still this head's: a claim under the\n"
+               " * wrong head lost a write (2026-10-21). */\n"
+               "static int ours(struct n *n) {\n  return n->head == 0;\n}\n\n"
+               "void claim(struct n *n) {\n  if (!ours(n))\n    return;\n  go(n);\n}\n\n"
+               "void claim_member(struct n *n) {\n  if (!ours(n))\n    return;\n  go(n);\n}\n",
+    })
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    [row] = helpers.unwritten_rules(tmp_path, files, defs)
+    assert (row["function"], row["evidence"], row["also"]) == (
+        "claim", "a.c:3 ours", ["a.c:14 claim_member"])
+
+
+def test_a_citation_atop_a_long_header_comment_covers_the_function(tmp_path):
+    from concipio import docs, lint
+    header = "/* Implements [X§1]\n" + "".join(" * why, at length.\n" for _ in range(10)) + " */\n"
+    lint_repo(tmp_path, {"README.md": "# Top\n\n- **X§1:** Own.\n",
+                         "a.c": header + "int ours(void) {\n  return 1;\n}\n"})
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    [row] = lint.coverage(tmp_path, ["a.c"], defs, strict=True)
+    assert row["covered"] == 3

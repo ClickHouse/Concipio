@@ -509,3 +509,13 @@ def test_a_section_number_after_another_docs_name_is_that_docs(tmp_path):
     files = docs.tracked_files(tmp_path)
     _, defs, _ = docs.load(root=tmp_path, files=files)
     assert [c.line for c in defs["DESIGN§10"].citations if c.path == "a.c"] == [8, 10, 13]
+
+
+def test_a_tracked_file_deleted_from_disk_is_not_read(tmp_path):
+    import subprocess
+    lint_repo(tmp_path, {"README.md": "# Top\n\nSee [notes](notes.md).\n",
+                         "notes.md": "# Notes\n"})
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    (tmp_path / "notes.md").unlink()
+    status, d = run_lint(tmp_path)
+    assert status == 0 and d["new"] == 0

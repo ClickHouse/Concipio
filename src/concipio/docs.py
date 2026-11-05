@@ -59,11 +59,14 @@ OWN_FILES = (".cpo", ".cpo-baseline.toml")
 
 
 def tracked_files(root):
+    """The files git tracks or would, as they stand on disk: a tracked file
+    deleted but not yet committed is gone, and a submodule is not a file."""
     out = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=root, capture_output=True, text=True, check=True,
     )
-    return [p for p in out.stdout.split("\0") if p and p.rsplit("/", 1)[-1] not in OWN_FILES]
+    return [p for p in out.stdout.split("\0") if p and p.rsplit("/", 1)[-1] not in OWN_FILES
+            and (Path(root) / p).is_file()]
 
 
 # Implements [CPO§T20]

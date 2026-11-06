@@ -251,6 +251,21 @@ what rules it keeps, through its guards and their comments.
     own. When that header names an incident and the predicate cites no
     design, the guard is reported with the header as its evidence, and a
     predicate many guards call is reported once, with all of them.
+### Claims of impossibility
+
+- **CPO§T63:** `cpo unreachable` lists the comments that claim a state
+  cannot happen ("unreachable", "cannot be exhausted", "by construction")
+  and the branches code asserts are dead, such as `ASSERT(0)`. Each is
+  backed by a test the comment names, a static assertion beside it, or a
+  cited design point that tests cite; one backed by none is reported. A
+  claim of impossibility is the comment most likely to hide a defect,
+  because nobody tests the state it rules out. `.cpo` may add phrases,
+  markers, and evidence patterns, such as its scenario names, under
+  `[unreachable]`.
+  - **CPO§T64:** With `lint = true` under `[unreachable]`, each unbacked
+    claim is a lint problem, so a project can baseline today's claims
+    and require every new one to come with its evidence [T40].
+
 ## Views of code
 
 - **CPO§T25:** Design docs do not store links to the code that implements

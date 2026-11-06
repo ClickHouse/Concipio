@@ -519,3 +519,28 @@ def test_a_tracked_file_deleted_from_disk_is_not_read(tmp_path):
     (tmp_path / "notes.md").unlink()
     status, d = run_lint(tmp_path)
     assert status == 0 and d["new"] == 0
+
+
+def test_claims_of_impossibility_need_evidence(tmp_path):
+    from concipio import claims, docs
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** The ring is sized to its slots.\n",
+        "a.c": "/* The ring is sized per slot, so it cannot be exhausted. */\n"
+               "int take(void) {\n  return 0;\n}\n\n"
+               "/* Unreachable: driven by test/ring_full.c. */\nint put(void) {\n  return 1;\n}\n\n"
+               "// Implements [X§1]: impossible by construction.\nint size(void) {\n  return 2;\n}\n\n"
+               "int pick(int k) {\n  switch (k) {\n  case 0: return 1;\n"
+               "  default: ASSERT(0);\n  }\n  return 0;\n}\n",
+        "test/t.c": "// Tests [X§1]\nint t(void) { return 0; }\n",
+    }, cpo="[unreachable]\nlint = true\n")
+    files = docs.tracked_files(tmp_path)
+    _, defs, _ = docs.load(root=tmp_path, files=files)
+    rows = claims.impossibility_claims(tmp_path, files, defs)
+    got = [(r["function"], r["claim"], r["evidence"]) for r in rows if r["path"] == "a.c"]
+    assert got == [("take", "cannot be exhausted", None),
+                   ("put", "Unreachable", "names test/ring_full.c"),
+                   ("size", "impossible", "cites X§1, which tests cite"),
+                   ("pick", "ASSERT(0)", None)], "one sentence is one claim"
+    _, d = run_lint(tmp_path)
+    assert sorted(p["key"] for p in d["problems"] if p["rule"] == "unbacked-claim") == [
+        "pick: assert(0)", "take: cannot be exhausted"]

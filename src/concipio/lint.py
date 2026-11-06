@@ -226,6 +226,8 @@ def check(root, files, defs, limits, cfg=None):
     problems += history_in_headings(root, files, defs, (cfg or {}).get("lint", {}).get("history_words"))
     problems += quoted_headings(root, defs)
     problems += unread_headings(root, files)
+    from . import claims
+    problems += claims.lint_problems(root, files, defs, cfg or {})
     problems += retired_terms(root, files, (cfg or {}).get("retired", {}))
     lost, later = orphans(root, every, defs, limits["master"], limits["postponed"])
     for f in lost:
@@ -564,7 +566,7 @@ STANDARDS = {
     "correctness": ("dangling-section", "stale-updated", "schema", "undeclared-field",
                     "field-syntax", "unverified-critical", "stale-critical",
                     "history-in-heading", "retired-term",
-                    "retired-term-live", "unread-heading"),
+                    "retired-term-live", "unread-heading", "unbacked-claim"),
     "consumability": ("section-length", "statement-length", "breadth", "buried",
                       "heading-in-blockquote"),
 }

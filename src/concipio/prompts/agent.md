@@ -105,6 +105,9 @@ fits on a screen, and what matters most stays near the top). The commands:
   a point of its own.
 - `cpo unwritten` lists guards whose comments name an incident, in code
   citing no design. Each is a rule to write into the design and cite.
+- `cpo unreachable` lists comments claiming a state cannot happen that no
+  test, static assertion, or tested design point backs. Write the test
+  that drives the state and name it in the comment, or correct the claim.
 - `cpo path <doc or tag>` shows how a doc is reached from the master;
   `cpo show <tag>` shows a statement and everything citing it; `cpo brief`
   prints what nobody may lose.

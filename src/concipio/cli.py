@@ -159,6 +159,9 @@ def build_parser():
     he.add_argument("--counts", action="store_true", help="only count each group")
     he.add_argument("--macros", action="store_true",
                     help="list function-like macros as helpers too")
+    ur = add("unreachable", "find comments claiming a state cannot happen, and what backs them")
+    ur.add_argument("paths", nargs="*", help="limit to these files or directories")
+    ur.add_argument("--all", action="store_true", help="list backed claims too")
     un = add("unwritten", "find guards whose comments state a rule no design records")
     un.add_argument("paths", nargs="*", help="limit to these files or directories")
     un.add_argument("--all", action="store_true",
@@ -302,6 +305,8 @@ def dispatch(args):
         status = cmd_coverage(args, defs, repo)
     elif args.command == "helpers":
         status = cmd_helpers(args, defs, repo)
+    elif args.command == "unreachable":
+        status = cmd_unreachable(args, defs, repo)
     elif args.command == "unwritten":
         status = cmd_unwritten(args, defs, repo)
     elif args.command == "audit":
@@ -440,6 +445,28 @@ def cmd_coverage(args, defs, repo):
                     "exempt": sum(r["exempt"] for r in tests)},
           "unmeasured": sum(r["lines"] for r in un), "files": rows},
          "\n".join(lines), args.json)
+    return 0
+
+
+# Implements [CPO§T63]
+def cmd_unreachable(args, defs, repo):
+    from . import claims
+    cfg = docs.config(repo)
+    files = under(repo, docs.tracked_files(repo), args.paths)
+    rows = claims.impossibility_claims(repo, files, defs, cfg.get("exclude", []),
+                                       cfg.get("unreachable", {}))
+    bare = [r for r in rows if not r["evidence"]]
+    lines = [f"{len(rows)} claims that a state cannot happen; {len(bare)} name no test, sit "
+             "beside no static assertion, and cite no tested design point."]
+    for r in rows if args.all else bare:
+        where = f"{r['path']}:{r['line']}" + (f" {r['function']}" if r["function"] else "")
+        lines += ["", f"{where}  [{r['claim']}]" + (f"  backed: {r['evidence']}"
+                                                   if r["evidence"] else ""),
+                  f"  {r['text'][:200]}"]
+    if bare:
+        lines += ["", "Each needs a test that drives the state, named in the comment, a static "
+                  "assertion, or a disposition."]
+    emit({"claims": rows, "unbacked": len(bare)}, "\n".join(lines), args.json)
     return 0
 
 

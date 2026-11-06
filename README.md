@@ -491,8 +491,11 @@ This list is for readers; under [M20], Concipio will generate it.
   to code rather than to reviews [M28, R3, R6]
 - [Trace format](docs/design/trace-format.md), a draft for traceability
   [M13, M14, M15, M20, M24, M36, R3, R4, R7]
-- [Audit waves](docs/design/audit-waves.md), a proposal for auditing a
-  whole codebase in waves grouped by mechanism [M51, R13]
+- [Audits](docs/design/audits.md), a proposal for named, scheduled audits
+  run in waves by mechanism, and for signing a design's structure
+  [M25, M51, R13]
+- [Kinds of design point](docs/design/kinds.md), a proposal for
+  mechanisms, libraries, and to-do points, each with its own rules
 
 Planned:
 

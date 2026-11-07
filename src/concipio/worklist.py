@@ -12,6 +12,9 @@ from pathlib import Path
 from . import docs, lint, records, spans
 
 CLAIM_SECONDS = 2 * 3600
+# Which rules decide what a unit claims; a record made under older ones is
+# fingerprinted again, at its own commit, before it is compared.
+RULES = 2
 # What a harness sets for the commands it runs, by the name of its process.
 HARNESS_IDS = [("claude", "CLAUDE_CODE_SESSION_ID"), ("codex", "CODEX_THREAD_ID"),
                ("pi", "PI_SESSION_ID")]
@@ -86,18 +89,46 @@ def claimed_code(root, d, index, tracked):
     them. A file the text names is a pointer, not a claim on the whole
     file [CPO§W2]."""
     regions = set()
-    for m in TICKED.finditer(d.text):
-        token = m.group(1).strip().rstrip("()")
-        if re.fullmatch(r"[A-Za-z_]\w*", token) and 0 < len(index.get(token, ())) <= 3:
-            regions.update(index[token])
+    names = {m.group(1).strip().rstrip("()") for m in TICKED.finditer(d.text)}
+    names = {n for n in names if re.fullmatch(r"[A-Za-z_]\w*", n)}
+    for token in names:
+        if 0 < len(index.get(token, ())) <= 3:
+            for path, start, end in index[token]:
+                regions.update(windows(root, path, start, end, names - {token}))
     for c in d.citations:
         if c.path.endswith(".md"):
             continue
         # A citation covers the declaration its comment documents [T8].
         found = decls_of(root, c.path)
         node = lint.covered_node(found[0], c.line, found[1]) if found else None
-        regions.add((c.path, node[0], node[1]) if node else (c.path, c.line, c.line))
+        if not node:
+            regions.add((c.path, c.line, c.line))
+        elif node[0] < c.line <= node[1] and node[1] - node[0] >= LARGE:
+            # A comment inside a large declaration cites what follows it.
+            regions.add((c.path, c.line, min(c.line + WINDOW - 1, node[1])))
+        else:
+            regions.update(windows(root, c.path, node[0], node[1], names))
     return sorted(regions, key=lambda r: (r[0], r[1] or 0))
+
+
+LARGE = 80
+WINDOW = 24
+
+
+# Implements [CPO§W39]
+def windows(root, path, start, end, names):
+    """The parts of a declaration a unit claims. A small one is claimed
+    whole; of a large one, the stretches that start at a line using a
+    name the unit's text gives, or else its head, so an edit elsewhere in
+    a long function does not stale every unit that mentions it."""
+    if end - start < LARGE:
+        return [(path, start, end)]
+    lines = decls_of(root, path)[1]
+    pattern = re.compile(r"\b(" + "|".join(map(re.escape, sorted(names))) + r")\b") \
+        if names else None
+    out = [(path, n, min(n + WINDOW - 1, end)) for n in range(start + 1, end + 1)
+           if pattern and pattern.search(lines[n - 1])]
+    return out or [(path, start, min(start + WINDOW - 1, end))]
 
 
 _decls = {}
@@ -188,9 +219,9 @@ def head(root):
                           capture_output=True, text=True).stdout.strip()
 
 
-def survey(root, defs, scope=()):
+def survey(root, defs, scope=(), files=None):
     """Every unit with the code it claims and its fingerprint."""
-    files = docs.tracked_files(root)
+    files = files if files is not None else docs.tracked_files(root)
     index, tracked = code_index(root, files), set(files)
     out = []
     for d in units(root, defs, scope):
@@ -229,6 +260,7 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
         return {"error": NO_AGENT.format(why=why, token=uuid.uuid4().hex[:12])}
     audit = Audit(store, name)
     now = int(time.time())
+    reprint(root, store, name)
     with store.lock():
         state = audit.load()
         found = survey(root, defs, scope)
@@ -278,7 +310,7 @@ def record(root, store, defs, name, tag, status, note=None, to=None, at=None):
         return {"error": err}
     with store.lock():
         state = audit.load()
-        state["units"][tag] = {"status": status, "print": fp, "sha": sha,
+        state["units"][tag] = {"status": status, "print": fp, "sha": sha, "rules": RULES,
                                "by": me or "unknown", "note": note, "for": to,
                                "at": int(time.time())}
         state["claims"].pop(tag, None)
@@ -288,17 +320,25 @@ def record(root, store, defs, name, tag, status, note=None, to=None, at=None):
 
 
 @contextlib.contextmanager
-def checkout_at(root, sha):
-    """A temporary checkout of a commit, removed afterwards."""
+def snapshot_at(root, sha):
+    """The tree of a commit, extracted from git's objects into a temporary
+    directory, with the list of files it holds. Nothing is added to the
+    repository, so it is safe while other work, such as a gate, runs in
+    it [CPO§W38]."""
+    import shutil
     import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="cpo-at-")) / "tree"
-    subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(tmp), sha],
-                   cwd=root, check=True, capture_output=True)
+    tmp = Path(tempfile.mkdtemp(prefix="cpo-at-"))
     try:
-        yield tmp
+        archive = subprocess.run(["git", "archive", sha], cwd=root, capture_output=True,
+                                 check=True).stdout
+        subprocess.run(["tar", "-x", "-C", str(tmp)], input=archive, check=True)
+        names = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", sha], cwd=root,
+                               capture_output=True, text=True, check=True).stdout.split("\0")
+        files = [f for f in names if f and f.rsplit("/", 1)[-1] not in docs.OWN_FILES
+                 and (tmp / f).is_file()]
+        yield tmp, files
     finally:
-        subprocess.run(["git", "worktree", "remove", "--force", str(tmp)], cwd=root,
-                       capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def resolve(root, rev):
@@ -306,11 +346,11 @@ def resolve(root, rev):
                           cwd=root, capture_output=True, text=True).stdout.strip()
 
 
-def unit_at(root, tag):
-    """A unit as it stands in a checkout: (definition, regions, print), or
+def unit_at(root, tag, files=None):
+    """A unit as it stands in a tree: (definition, regions, print), or
     None if it is no unit there."""
-    _, defs, _ = docs.load(root=root)
-    match = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
+    _, defs, _ = docs.load(root=root, files=files)
+    match = [u for u in survey(root, defs, (tag,), files) if u[0].tag == tag]
     return match[0] if match else None
 
 
@@ -324,8 +364,8 @@ def print_at(root, defs, tag, at=None):
     sha = resolve(root, at)
     if not sha:
         return None, None, f"{at} is not a commit"
-    with checkout_at(root, sha) as tmp:
-        then = unit_at(tmp, tag)
+    with snapshot_at(root, sha) as (tmp, files):
+        then = unit_at(tmp, tag, files)
     if not then:
         return None, None, f"{tag} was not a unit at {sha}"
     return then[2], sha, None
@@ -340,6 +380,13 @@ def parts(root, unit):
     for path, start, end in regions:
         found = decls_of(root, path)
         name = next((n for a, b, k, n, _ in found[0] if a == start), None) if found else None
+        if name is None and found and start < end:
+            # A window into a large declaration is known by the declaration
+            # and the line it starts at, which survive the code moving.
+            around = [x for x in found[0] if x[0] <= start <= x[1] and x[3]]
+            if around:
+                inner = min(around, key=lambda x: x[1] - x[0])[3]
+                name = f"{inner}~{found[1][start - 1].strip()[:48]}"
         if name is None and start == end:
             # A citation in a comment that documents no declaration, such
             # as a line of metadata, is a mention, not code [W38].
@@ -359,6 +406,14 @@ def span_of(root, d):
         if n > d.line and docs.HEADING.match(line):
             return d.line, n - 1
     return d.line, len(lines)
+
+
+def declared(root, key):
+    """Whether the declaration a part's key names exists in a tree."""
+    path, _, rest = key.partition(":")
+    name = rest.split("~", 1)[0]
+    found = decls_of(root, path)
+    return bool(found) and any(n == name for _, _, _, n, _ in found[0])
 
 
 def commits_since(root, sha, path, lines=None):
@@ -391,10 +446,13 @@ def why_stale(root, defs, state, tag, context=3):
     if behind:
         return {"error": f"{tag} was checked at {rec['sha']}, which this checkout does not "
                          "contain; run from a checkout that does, or it reads as changed"}
-    with checkout_at(root, rec["sha"]) as tmp:
-        then = unit_at(tmp, tag)
-        old = parts(tmp, then) if then else ("", {}, now[0][0].path, None, set())
     new = parts(root, now[0])
+    with snapshot_at(root, rec["sha"]) as (tmp, files):
+        then = unit_at(tmp, tag, files)
+        old = parts(tmp, then) if then else ("", {}, now[0][0].path, None, set())
+        # Whether each declaration exists in the old tree, so a unit that
+        # stopped claiming code still there is not reported as code removed.
+        existed = {k for k in set(new[1]) - set(old[1]) if declared(tmp, k)}
 
     def diff(a, b, label):
         return "\n".join(difflib.unified_diff(a.splitlines(), b.splitlines(),
@@ -410,7 +468,13 @@ def why_stale(root, defs, state, tag, context=3):
         if (a and a[0]) == (b and b[0]):
             continue
         path = key.rsplit(":", 1)[0]
-        changes.append({"what": "code" if a and b else "added" if b else "removed",
+        if a and b:
+            what = "code"
+        elif b:
+            what = "newly claimed" if key in existed else "added"
+        else:
+            what = "no longer claimed" if declared(root, key) else "removed"
+        changes.append({"what": what,
                         "where": key,
                         "commits": commits_since(root, rec["sha"], path, b[1:] if b else None),
                         "diff": diff(a[0] if a else "", b[0] if b else "", key)})
@@ -421,11 +485,39 @@ def why_stale(root, defs, state, tag, context=3):
     return {"unit": tag, "checked": rec["sha"], "status": rec["status"], "changes": changes}
 
 
+def reprint(root, store, name):
+    """Fingerprint again, at their own commits, the records made under
+    older rules for what a unit claims, so a change to the rules does not
+    make every record look stale. One snapshot serves each commit."""
+    audit = Audit(store, name)
+    state = audit.load()
+    old = {}
+    for tag, rec in state["units"].items():
+        if rec.get("rules") != RULES:
+            old.setdefault(rec["sha"], []).append(tag)
+    for sha, tags in old.items():
+        with snapshot_at(root, sha) as (tmp, files):
+            _, then, _ = docs.load(root=tmp, files=files)
+            found = {u[0].tag: u[2] for u in survey(tmp, then, tuple(tags), files)}
+        for tag in tags:
+            if tag in found:
+                state["units"][tag].update(print=found[tag], rules=RULES)
+    if old:
+        with store.lock():
+            current = audit.load()
+            for tag, rec in state["units"].items():
+                if tag in current["units"] and current["units"][tag]["sha"] == rec["sha"]:
+                    current["units"][tag].update(print=rec["print"], rules=rec.get("rules"))
+            audit.save(current)
+    return sum(len(t) for t in old.values())
+
+
 # Implements [CPO§W13]
 def status(root, store, defs, name, only_me=False):
     """Where an audit stands: each unit's standing, the verified share by
     units and by the lines they claim, and what is open."""
     me, _ = agent()
+    reprint(root, store, name)
     state = Audit(store, name).load()
     now = int(time.time())
     rows = []

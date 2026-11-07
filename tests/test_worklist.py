@@ -114,3 +114,37 @@ def test_why_lists_only_commits_to_the_unit_and_collapses_bare_citations(tmp_pat
     by = {c["what"]: c for c in out["changes"]}
     assert [c.split(" ", 1)[1] for c in by["text"]["commits"]] == ["Say how the ring refuses"]
     assert by["citations"]["where"] == "+mutants.sh:1" and "added" not in by
+
+
+def test_a_large_declaration_is_claimed_only_where_the_unit_points(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    body = [f"  x{i} = {i};" for i in range(100)]
+    body[50] = "  /* D§2: the log entry is appended here */"
+    (repo / "src/big.c").write_text("void big(void) {\n" + "\n".join(body) + "\n}\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "big"],
+                   cwd=repo, check=True)
+    (repo / ".cpo").write_text((repo / ".cpo").read_text() + "bare_in_code = true\n")
+    _, defs, _ = docs.load(root=repo)
+    worklist.record(repo, store, defs, "trial", "D§2", "verified")
+    body[5] = "  x5 = 500;"
+    (repo / "src/big.c").write_text("void big(void) {\n" + "\n".join(body) + "\n}\n")
+    assert worklist.status(repo, store, defs, "trial")["counts"].get("verified") == 1, \
+        "an edit far from the citing comment does not stale the unit"
+    body[52] = "  x52 = 520;"
+    (repo / "src/big.c").write_text("void big(void) {\n" + "\n".join(body) + "\n}\n")
+    assert worklist.status(repo, store, defs, "trial")["counts"].get("stale") == 1
+
+
+def test_code_a_unit_stops_naming_is_no_longer_claimed_not_removed(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    worklist.record(repo, store, defs, "trial", "D§1", "verified")
+    (repo / "DESIGN.md").write_text((repo / "DESIGN.md").read_text().replace(
+        "`ring_take` refuses.", "taking refuses."))
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qam", "x"],
+                   cwd=repo, check=True)
+    _, defs, _ = docs.load(root=repo)
+    out = worklist.why_stale(repo, defs, worklist.Audit(store, "trial").load(), "D§1")
+    assert {c["what"] for c in out["changes"]} == {"text", "no longer claimed"}

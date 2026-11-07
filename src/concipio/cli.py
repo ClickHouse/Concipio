@@ -142,7 +142,21 @@ def build_parser():
     lst.add_argument("--where", action="append", metavar="KEY=VALUE",
                      help="only statements whose field has this value")
     add("brief", "print what no agent or person may lose: critical statements and active work")
-    au = add("audit", "score the repository: every problem by rule, and its marked debt")
+    au = add("audit", "score the repository; or, with an action, work a named audit")
+    au.add_argument("action", nargs="?", choices=["next", "done", "mine", "status"],
+                    help="next: claim a unit and print its brief; done: record its outcome; "
+                         "mine: what you hold; status: where the audit stands")
+    au.add_argument("name", nargs="?", help="the audit's name, such as its date")
+    au.add_argument("unit", nargs="?", help="for done: the unit, such as DESIGN§5c")
+    au.add_argument("--budget", type=int, default=6000,
+                    help="for next: tokens of code the brief may include (default 6000)")
+    au.add_argument("--scope", nargs="*", default=[],
+                    help="for next: docs, directories, or tags to draw units from")
+    out = au.add_mutually_exclusive_group()
+    out.add_argument("--verified", action="store_true", help="for done: the unit's claims hold")
+    out.add_argument("--finding", metavar="TEXT", help="for done: what is wrong, and where")
+    out.add_argument("--question", metavar="TEXT", help="for done: what a person must decide")
+    au.add_argument("--for", dest="to", metavar="WHO", help="for done --question: whom it is for")
     au.add_argument("--against", metavar="REV",
                     help="compare with another commit, and exit 1 if the score got worse")
     au.add_argument("--list", action="store_true", help="list each problem, not just the counts")
@@ -309,6 +323,8 @@ def dispatch(args):
         status = cmd_unreachable(args, defs, repo)
     elif args.command == "unwritten":
         status = cmd_unwritten(args, defs, repo)
+    elif args.command == "audit" and args.action:
+        status = cmd_worklist(args, defs, repo)
     elif args.command == "audit":
         status = cmd_audit(args, defs, repo)
     elif args.command == "path":
@@ -445,6 +461,61 @@ def cmd_coverage(args, defs, repo):
                     "exempt": sum(r["exempt"] for r in tests)},
           "unmeasured": sum(r["lines"] for r in un), "files": rows},
          "\n".join(lines), args.json)
+    return 0
+
+
+# Implements [CPO§W8]
+def cmd_worklist(args, defs, repo):
+    from . import worklist
+    from .store import Store
+    if not args.name:
+        raise SystemExit(f"cpo audit {args.action} needs the audit's name")
+    store = Store(repo)
+    if args.action == "next":
+        b = worklist.next_unit(repo, store, defs, args.name, args.budget, args.scope)
+        if b.get("error") or b.get("done"):
+            emit(b, b.get("error") or b["message"], args.json)
+            return 2 if b.get("error") else 0
+        lines = [f"{b['unit']} ({b['name']}), {b['where']}, claimed by {b['holder']} for two "
+                 "hours.", ""]
+        if b["before"]:
+            lines += [f"It was {b['before']['status']} at {b['before']['sha']}"
+                      + (f": {b['before']['note']}" if b["before"].get("note") else "")
+                      + "; it has changed since.", ""]
+        lines += [b["text"], ""]
+        for c in b["code"]:
+            if c["text"] is None:
+                lines.append(f"--- {c['where']} ({c['omitted']} lines, over the budget; read it "
+                             "yourself)")
+            else:
+                lines += [f"--- {c['where']}", c["text"]]
+        if not b["code"]:
+            lines.append("It names and cites no code Concipio can find; check it against the "
+                         "code yourself.")
+        lines += ["", f"Check each claim against the code, then: cpo audit done {args.name} "
+                  f"{b['unit']} --verified | --finding \"...\" | --question \"...\""]
+        emit(b, "\n".join(lines), args.json)
+        return 0
+    if args.action == "done":
+        if not args.unit or not (args.verified or args.finding or args.question):
+            raise SystemExit("cpo audit done NAME UNIT needs --verified, --finding, or --question")
+        st = "verified" if args.verified else "finding" if args.finding else "question"
+        r = worklist.record(repo, store, defs, args.name, args.unit, st,
+                            args.finding or args.question, args.to)
+        emit(r, r.get("error") or f"{args.unit}: {st} at {r['sha']}.", args.json)
+        return 1 if r.get("error") else 0
+    r = worklist.status(repo, store, defs, args.name, only_me=args.action == "mine")
+    lines = [f"{r['audit']}: {r['verified_units']} of {r['units']} units verified, "
+             f"{r['verified_lines']} of {r['lines']} lines of the code they claim."
+             if args.action == "status" else f"Yours in {r['audit']}:"]
+    lines.append("  " + ", ".join(f"{n} {k}" for k, n in sorted(r["counts"].items())))
+    for row in r["rows"]:
+        if row["standing"] in ("claimed", "finding", "question", "stale"):
+            extra = (f" by {row['holder']}" if row["holder"] else "") + (
+                f": {row['note']}" if row["note"] else "") + (
+                f" (for {row['for']})" if row["for"] else "")
+            lines.append(f"  {row['standing']:9} {row['unit']} {row['name']}{extra}")
+    emit(r, "\n".join(lines), args.json)
     return 0
 
 

@@ -2,7 +2,8 @@
 
 Parent: [Concipio](../../README.md)
 
-**Status: proposed.** Nothing here is built.
+**Status: proposed.** Claiming, recording, and status are built [W8, W10, W13], over
+design sections and the code they name or cite; the rest is not.
 
 Onboarding a C codebase to Concipio found real defects, and nearly all of
 them came from one move: take a design section's claims and check them
@@ -75,6 +76,15 @@ impossibility [T63].
   holder and expires, so several agents work one audit without a
   hand-written brief each, and work an agent abandons returns to the
   queue.
+- **CPO§W27:** A claim's holder is `$CPO_AGENT`, or else the session of
+  the nearest harness among the process's ancestors: Claude Code's
+  `CLAUDE_CODE_SESSION_ID`, Codex's `CODEX_THREAD_ID`, or pi's
+  `PI_SESSION_ID`. A harness passes its own variables to any harness it
+  starts, so the nearest one decides. These IDs survive compaction, and
+  a claim records the holder's messaging socket where the harness has
+  one. Subagents share their parent's session, and Antigravity names
+  none, so each needs a `CPO_AGENT`; Concipio prints one to set rather
+  than guess.
 - **CPO§W26:** A large model may claim a unit and split it into child
   claims for helpers, each with a narrower slice of code and a stated
   question. Smaller models do useful work when handed a slice and told

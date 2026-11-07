@@ -140,6 +140,26 @@ The conventions:
 - A design point should claim no more than 200 lines of code; refine it into
   sub-points, or extract smaller routines.
 
+## Working an audit
+
+An audit is a named worklist of design sections, each checked against the
+code it names or cites. Several agents can work one at a time.
+
+1. `cpo audit next <name>` claims a section for you and prints its text and
+   code. It resumes your claim if you already hold one.
+2. Check each claim the section makes against the code.
+3. Record the outcome: `cpo audit done <name> <unit> --verified`, or
+   `--finding "<what is wrong, and where>"`, or
+   `--question "<what a person must decide>" --for <whom>`. Recording
+   changes no file in the repository, so you can record a finding before
+   the fix and the corrected prose land.
+4. Repeat. `cpo audit mine <name>` shows what you hold, and
+   `cpo audit status <name>` shows the whole audit.
+
+If Concipio cannot tell who you are, it prints a `CPO_AGENT` line to export.
+Keep that line in any summary of your work, and give each helper you start
+its own.
+
 ## Asking why
 
 Concipio also answers questions outside a review. Before reading files to

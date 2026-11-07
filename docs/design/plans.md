@@ -136,6 +136,11 @@ code. It builds on the kinds of design point [Y1, Y12, Y14], the store
   citation to work. A check made at an earlier commit is recorded at
   that commit, `--at <sha>`, and shows stale at once if the unit has
   changed since, so earlier work is neither lost nor overstated.
+- **CPO§W38:** A stale unit says why: whether its text or its code
+  changed, which declarations, the commits that touched them, and a
+  diff of each against the commit it was checked at. The brief for a
+  stale unit opens with that, and `cpo audit why` shows it alone, so a
+  re-check reads the change rather than the whole unit again.
 - **CPO§W12:** An audit's findings become items of the same plan: a fix,
   then the corrected prose, after which the unit is verified and ready
   to cite [Y13]. A finding the team has no cycles for becomes a to-do

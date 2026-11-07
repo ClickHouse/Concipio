@@ -2,6 +2,7 @@
 against the code they name or cite, and record, kept as glue in the
 store so it survives an agent's compaction [CPO§W2, CPO§W8, CPO§W21]."""
 
+import contextlib
 import os
 import re
 import subprocess
@@ -255,7 +256,10 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
         left -= len(text)
         code.append({"where": where, "text": text})
     before = state["units"].get(d.tag)
-    return {"audit": name, "unit": d.tag, "name": d.name, "where": f"{d.path}:{d.line}",
+    # A stale unit's brief carries what changed, so the re-check reads that.
+    changed = why_stale(root, defs, state, d.tag)["changes"] if before and \
+        before["print"] != fp else None
+    return {"audit": name, "unit": d.tag, "changed": changed, "name": d.name, "where": f"{d.path}:{d.line}",
             "text": d.text, "code": code, "pointers": d.pointers, "before": before,
             "holder": me,
             "until": now + CLAIM_SECONDS}
@@ -283,30 +287,103 @@ def record(root, store, defs, name, tag, status, note=None, to=None, at=None):
     return {"audit": name, "unit": tag, "status": status, "sha": sha}
 
 
-def print_at(root, defs, tag, at=None):
-    """A unit's fingerprint and commit, here or at an earlier commit, read
-    from a temporary checkout of it. Returns (print, sha, error)."""
+@contextlib.contextmanager
+def checkout_at(root, sha):
+    """A temporary checkout of a commit, removed afterwards."""
     import tempfile
-    if not at:
-        match = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
-        return (match[0][2], head(root), None) if match else \
-            (None, None, f"{tag} is not a unit of this audit")
-    sha = subprocess.run(["git", "rev-parse", "--short=12", "--verify", f"{at}^{{commit}}"],
-                         cwd=root, capture_output=True, text=True).stdout.strip()
-    if not sha:
-        return None, None, f"{at} is not a commit"
     tmp = Path(tempfile.mkdtemp(prefix="cpo-at-")) / "tree"
     subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(tmp), sha],
                    cwd=root, check=True, capture_output=True)
     try:
-        _, then, _ = docs.load(root=tmp)
-        match = [u for u in survey(tmp, then, (tag,)) if u[0].tag == tag]
-        if not match:
-            return None, None, f"{tag} was not a unit at {sha}"
-        return match[0][2], sha, None
+        yield tmp
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(tmp)], cwd=root,
                        capture_output=True)
+
+
+def resolve(root, rev):
+    return subprocess.run(["git", "rev-parse", "--short=12", "--verify", f"{rev}^{{commit}}"],
+                          cwd=root, capture_output=True, text=True).stdout.strip()
+
+
+def unit_at(root, tag):
+    """A unit as it stands in a checkout: (definition, regions, print), or
+    None if it is no unit there."""
+    _, defs, _ = docs.load(root=root)
+    match = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
+    return match[0] if match else None
+
+
+def print_at(root, defs, tag, at=None):
+    """A unit's fingerprint and commit, here or at an earlier commit, read
+    from a temporary checkout of it. Returns (print, sha, error)."""
+    if not at:
+        match = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
+        return (match[0][2], head(root), None) if match else \
+            (None, None, f"{tag} is not a unit of this audit")
+    sha = resolve(root, at)
+    if not sha:
+        return None, None, f"{at} is not a commit"
+    with checkout_at(root, sha) as tmp:
+        then = unit_at(tmp, tag)
+    if not then:
+        return None, None, f"{tag} was not a unit at {sha}"
+    return then[2], sha, None
+
+
+def parts(root, unit):
+    """A unit's text, and its code by file and declaration, so two
+    versions can be compared piece by piece."""
+    d, regions, _ = unit
+    code = {}
+    for path, start, end in regions:
+        found = decls_of(root, path)
+        name = next((n for a, b, k, n, _ in found[0] if a == start), None) if found else None
+        code[f"{path}:{name or start}"] = region_text(root, (path, start, end))
+    return d.text, code, d.path
+
+
+def commits_since(root, sha, path):
+    out = subprocess.run(["git", "log", "--format=%h %s", f"{sha}..HEAD", "--", path], cwd=root,
+                         capture_output=True, text=True).stdout.splitlines()
+    return out
+
+
+# Implements [CPO§W38]
+def why_stale(root, defs, state, tag, context=3):
+    """What changed in a unit since it was checked: its text, its code by
+    declaration, each with the commits that touched it and a diff, so a
+    re-check reads the change, not the whole unit again."""
+    import difflib
+    rec = state["units"].get(tag)
+    if not rec:
+        return {"error": f"{tag} has not been checked in this audit"}
+    now = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
+    if not now:
+        return {"error": f"{tag} is not a unit of this audit"}
+    with checkout_at(root, rec["sha"]) as tmp:
+        then = unit_at(tmp, tag)
+        old = parts(tmp, then) if then else ("", {}, now[0][0].path)
+    new = parts(root, now[0])
+
+    def diff(a, b, label):
+        return "\n".join(difflib.unified_diff(a.splitlines(), b.splitlines(),
+                                               f"{label} at {rec['sha']}", f"{label} now",
+                                               n=context, lineterm=""))
+    changes = []
+    if old[0] != new[0]:
+        changes.append({"what": "text", "where": f"{new[2]} {tag}",
+                        "commits": commits_since(root, rec["sha"], new[2]),
+                        "diff": diff(old[0], new[0], tag)})
+    for key in sorted(set(old[1]) | set(new[1])):
+        a, b = old[1].get(key), new[1].get(key)
+        if a == b:
+            continue
+        path = key.rsplit(":", 1)[0]
+        changes.append({"what": "code" if a and b else "added" if b else "removed",
+                        "where": key, "commits": commits_since(root, rec["sha"], path),
+                        "diff": diff(a or "", b or "", key)})
+    return {"unit": tag, "checked": rec["sha"], "status": rec["status"], "changes": changes}
 
 
 # Implements [CPO§W13]

@@ -73,3 +73,20 @@ def test_a_check_made_at_an_earlier_commit_shows_stale_at_once(tmp_path, monkeyp
     worklist.record(repo, store, defs, "trial", "D§2", "verified", at=first)
     assert worklist.status(repo, store, defs, "trial")["counts"]["verified"] == 1, \
         "a unit unchanged since the earlier commit stays verified"
+
+
+def test_a_stale_unit_says_what_changed_and_in_which_commits(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    worklist.record(repo, store, defs, "trial", "D§1", "verified")
+    (repo / "src/ring.c").write_text("int ring_take(void) {\n  return -1;\n}\n")
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qam",
+                    "Refuse with -1"], cwd=repo, check=True)
+    state = worklist.Audit(store, "trial").load()
+    out = worklist.why_stale(repo, defs, state, "D§1")
+    [change] = out["changes"]
+    assert change["what"] == "code" and change["where"] == "src/ring.c:ring_take"
+    assert change["commits"][0].endswith("Refuse with -1")
+    assert "-  return 0;" in change["diff"] and "+  return -1;" in change["diff"]
+    brief = worklist.next_unit(repo, store, defs, "trial")
+    assert brief["unit"] == "D§1" and brief["changed"][0]["where"] == "src/ring.c:ring_take"

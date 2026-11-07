@@ -143,11 +143,12 @@ def build_parser():
                      help="only statements whose field has this value")
     add("brief", "print what no agent or person may lose: critical statements and active work")
     au = add("audit", "score the repository; or, with an action, work a named audit")
-    au.add_argument("action", nargs="?", choices=["next", "done", "mine", "status"],
+    au.add_argument("action", nargs="?", choices=["next", "done", "why", "mine", "status"],
                     help="next: claim a unit and print its brief; done: record its outcome; "
-                         "mine: what you hold; status: where the audit stands")
+                         "why: what changed in a stale unit; mine: what you hold; "
+                         "status: where the audit stands")
     au.add_argument("name", nargs="?", help="the audit's name, such as its date")
-    au.add_argument("unit", nargs="?", help="for done: the unit, such as DESIGN§5c")
+    au.add_argument("unit", nargs="?", help="for done and why: the unit, such as DESIGN§5c")
     au.add_argument("--budget", type=int, default=6000,
                     help="for next: tokens of code the brief may include (default 6000)")
     au.add_argument("--scope", nargs="*", default=[],
@@ -466,6 +467,17 @@ def cmd_coverage(args, defs, repo):
     return 0
 
 
+def describe_changes(changes):
+    out = []
+    for c in changes:
+        out.append(f"{c['what']}: {c['where']}")
+        out += [f"  {line}" for line in c["commits"][:8]]
+        if len(c["commits"]) > 8:
+            out.append(f"  ... and {len(c['commits']) - 8} more commits")
+        out += [c["diff"], ""]
+    return out
+
+
 # Implements [CPO§W8]
 def cmd_worklist(args, defs, repo):
     from . import worklist
@@ -484,6 +496,9 @@ def cmd_worklist(args, defs, repo):
             lines += [f"It was {b['before']['status']} at {b['before']['sha']}"
                       + (f": {b['before']['note']}" if b["before"].get("note") else "")
                       + "; it has changed since.", ""]
+        if b.get("changed"):
+            lines += ["What changed since it was checked:", ""] + describe_changes(b["changed"])
+            lines.append("")
         lines += [b["text"], ""]
         for c in b["code"]:
             if c["text"] is None:
@@ -508,6 +523,19 @@ def cmd_worklist(args, defs, repo):
                             args.finding or args.question, args.to, args.at)
         emit(r, r.get("error") or f"{args.unit}: {st} at {r['sha']}.", args.json)
         return 1 if r.get("error") else 0
+    if args.action == "why":
+        if not args.unit:
+            raise SystemExit("cpo audit why NAME UNIT needs the unit")
+        state = worklist.Audit(store, args.name).load()
+        r = worklist.why_stale(repo, defs, state, args.unit)
+        if r.get("error"):
+            emit(r, r["error"], args.json)
+            return 1
+        lines = [f"{r['unit']} was {r['status']} at {r['checked']}."]
+        lines += describe_changes(r["changes"]) if r["changes"] else [
+            "Nothing it claims has changed since."]
+        emit(r, "\n".join(lines), args.json)
+        return 0
     r = worklist.status(repo, store, defs, args.name, only_me=args.action == "mine")
     lines = [f"{r['audit']}: {r['verified_units']} of {r['units']} units verified, "
              f"{r['verified_lines']} of {r['lines']} lines of the code they claim."

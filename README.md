@@ -307,7 +307,7 @@ review teaches before any of them is built.
       may list the discussions behind it with a line each, or a doc may cite
       its parent, as the people and agents maintaining it prefer. Historic
       docs count too, so each needs a succinct description somewhere.
-    - **CPO§M50:** `cpo audit` scores a repository rather than passing or
+    - **CPO§M50:** `cpo status` scores a repository rather than passing or
     failing it: every problem, counted by rule, and a total. With
     `--against` it compares another commit, and fails only if the total
     grew, so every commit can leave the docs a little better without having

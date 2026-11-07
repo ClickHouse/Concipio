@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import subprocess
+import time
 import sys
 import textwrap
 from dataclasses import asdict
@@ -115,7 +116,6 @@ REVIEW_COMMANDS = {
     ("unjustified", None): review.cmd_unjustified,
     ("next", None): review.cmd_next,
     ("check", None): review.cmd_check,
-    ("status", None): review.cmd_status,
     ("record", None): review.cmd_record,
     ("render", None): review.cmd_render,
 }
@@ -273,7 +273,10 @@ def build_parser():
     rd = add("render", "write the review as a design doc in the store and lint it")
     rd.add_argument("--statement-limit", type=int, default=lint_mod.STATEMENT_LIMIT)
     rd.add_argument("--section-limit", type=int, default=lint_mod.SECTION_LIMIT)
-    add("status", "report progress and stalls")
+    stp = add("status", "what is in progress, then the score: every problem by rule")
+    stp.add_argument("--against", metavar="REV",
+                     help="compare with another commit, and exit 1 if the score got worse")
+    stp.add_argument("--list", action="store_true", help="list each problem, not just the counts")
     wy = add("why", "explain why a line of code exists")
     wy.add_argument("target", help="path:line")
     wy.add_argument("--at", default="HEAD", help="the commit to read the file at (default HEAD)")
@@ -326,6 +329,8 @@ def dispatch(args):
         status = cmd_unreachable(args, defs, repo)
     elif args.command == "unwritten":
         status = cmd_unwritten(args, defs, repo)
+    elif args.command == "status":
+        status = cmd_status(args, defs, repo)
     elif args.command == "audit" and args.action:
         status = cmd_worklist(args, defs, repo)
     elif args.command == "audit":
@@ -705,7 +710,8 @@ def audit_rev(repo, rev, args, config=None):
                        capture_output=True)
 
 
-def cmd_audit(args, defs, repo):
+def score_report(args, defs, repo):
+    """The score, by standard and rule, as data, lines, and exit status."""
     now = audit_at(repo, args, defs)
     before = own = None
     if args.against:
@@ -758,10 +764,53 @@ def cmd_audit(args, defs, repo):
     if before:
         data["against"] = {"rev": args.against, "score": before["score"], "rules": before["rules"],
                            "own_config_score": own["score"] if own else before["score"]}
-    emit(data, "\n".join(lines), args.json)
     worse = before and now["score"] > before["score"]
     looser = own and before["score"] < own["score"]
-    return 1 if worse or looser else 0
+    return data, lines, 1 if worse or looser else 0
+
+
+def cmd_audit(args, defs, repo):
+    """The score, as `cpo audit` gave it before `cpo status` took it over."""
+    data, lines, status = score_report(args, defs, repo)
+    print("cpo audit with no action now lives in cpo status, which also lists the work in "
+          "flight; this form will go away.", file=sys.stderr)
+    emit(data, "\n".join(lines), args.json)
+    return status
+
+
+# Implements [CPO§W37]
+def cmd_status(args, defs, repo):
+    """Where a person or agent stands: the work in flight first, then the
+    score, as `git status` reports a rebase before the tree."""
+    from . import worklist
+    from .store import Store
+    flight, lines = {"audits": [], "review": None}, []
+    store = Store(repo)
+    me, _ = worklist.agent()
+    for path in sorted((store.dir / "audits").glob("*.json")):
+        name = path.stem
+        r = worklist.status(repo, store, defs, name)
+        state = worklist.Audit(store, name).load()
+        now = int(time.time())
+        mine = sorted(t for t, c in state["claims"].items()
+                      if c["holder"] == me and c["until"] > now)
+        flight["audits"].append({"name": name, "units": r["units"], "counts": r["counts"],
+                                 "verified_lines": r["verified_lines"], "lines": r["lines"],
+                                 "yours": mine})
+        counts = ", ".join(f"{n} {k}" for k, n in sorted(r["counts"].items()))
+        lines.append(f"  audit {name}: {r['verified_units']} of {r['units']} units verified "
+                     f"({counts})" + (f"; you hold {', '.join(mine)}" if mine else ""))
+    try:
+        with review.Store(repo).lock():
+            data, human = review.cmd_status(review.Review(repo), args)
+        flight["review"] = data
+        lines.append("  " + human.replace("\n", "\n  "))
+    except review.ReviewError:
+        pass
+    data, score, status = score_report(args, defs, repo)
+    out = (["In progress:"] + lines + [""] if lines else ["Nothing in progress."]) + score
+    emit({"in_progress": flight, **data}, "\n".join(out), args.json)
+    return status
 
 
 def cmd_path(args, defs, repo):

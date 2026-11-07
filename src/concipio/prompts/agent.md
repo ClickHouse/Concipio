@@ -92,8 +92,9 @@ traces to a design, every doc is reachable), correctness (the docs say what
 the code does and agree with one another), and consumability (every design
 fits on a screen, and what matters most stays near the top). The commands:
 
-- `cpo audit` scores all three. `cpo audit --against main` fails only if a
-  change made the score worse; aim to lower it a little in every commit.
+- `cpo status` lists the work in progress, then scores all three.
+  `cpo status --against main` fails only if a change made the score worse;
+  aim to lower it a little in every commit.
 - `cpo lint` reports each problem, and passes when nothing is new or worse
   than `.cpo-baseline.toml`. After fixing problems, tighten the baseline with
   `cpo lint --write-baseline`. Never rewrite it to hide a new problem.

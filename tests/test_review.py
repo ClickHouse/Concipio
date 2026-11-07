@@ -130,7 +130,7 @@ def test_status_reports_flapping_attachments(repo, capsys):
         run(capsys, "attach", "S1", "C1")
         run(capsys, "detach", "S1", "C1")
     _, d = run(capsys, "status")
-    assert d["stall"] and "S1 on C1" in d["stall"]
+    assert d["in_progress"]["review"]["stall"] and "S1 on C1" in d["in_progress"]["review"]["stall"]
 
 
 def test_reviewable_reuses_the_pinned_review(repo, capsys):
@@ -148,7 +148,7 @@ def test_record_reports_tokens_per_span(repo, capsys):
     run(capsys, "record", "--model", "haiku", "--input-tokens", "900",
         "--output-tokens", "100", "--spans", "4")
     _, d = run(capsys, "status")
-    assert d["cost"]["haiku"] == {"tokens": 1000, "input_tokens": 900,
+    assert d["in_progress"]["review"]["cost"]["haiku"] == {"tokens": 1000, "input_tokens": 900,
                                   "output_tokens": 100, "spans": 4}
 
 

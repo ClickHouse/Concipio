@@ -27,6 +27,12 @@ work still to come.
   point may carry `Status=planned` or `Status=in-progress`; one with
   neither describes the code as it stands. Planned points are a
   roadmap's items [W35], which agents claim and work through a plan.
+  - **CPO§Y17:** Concipio owns the values of `Status`, because it acts
+    on them: it offers planned points to agents, and drops the status
+    when the work lands [Y15]. A project's own labels for planned work,
+    such as a milestone or a release, are fields of their own,
+    `{Status=planned Milestone=v2}`, which a schema can check and a query
+    can select [F5, F7], rather than suffixes on the status.
 - **CPO§Y15:** When planned work lands, its point drops the status and
   becomes a claim about the code as it stands, which puts it in the
   queue of any audit covering it [W2]: plan, build, verify, then cite
@@ -45,12 +51,16 @@ work still to come.
 
 ## The code a point claims
 
-- **CPO§Y12:** A design point claims code in one of two ways. It *names*
-  code when its text mentions a declaration or a path, as in `` `ring_take` ``
-  or `src/ring.c`, which Concipio resolves to declarations as it does for
-  look-alikes [T52]. It *cites* code when the code carries its tag [T6]. A
-  drifted design names code long before anything cites it, so everything
-  that judges a point works from the code it names or cites.
+- **CPO§Y12:** In an adopted design, code names its design, not the
+  other way around: the code carries a point's tag [T6], and the point
+  speaks of "the code implementing" it. A point claims the code that
+  cites it.
+  - **CPO§Y18:** A design written before adoption often names its code
+    instead, mentioning functions and files in backticks, as in
+    `` `ring_take` `` or `src/ring.c`, and nothing cites it yet. Until
+    something does, Concipio takes the code a point names, resolved to
+    declarations as for look-alikes [T52], as the code it claims. That
+    is a bridge for adoption, not a way to write new design.
 - **CPO§Y13:** Adoption turns names into citations. Citing a section
   before its claims are checked would lock its errors in, so citations
   come after verification [W21], and coverage, which counts only
@@ -77,7 +87,10 @@ work still to come.
   as a reference [T28].
 - **CPO§Y5:** An audit asks two things of a library: whether its callers
   rely on more than its contract promises, and whether another library
-  already does the same job [Y6].
+  already does the same job [Y6]. Concipio cannot judge the first, but it
+  can make sure nobody skips it: the audit's item for a library carries
+  a checkbox for each caller the call graph finds [T51], and the item is
+  done only when every box is ticked.
 
 ## Duplicates
 
@@ -102,9 +115,15 @@ work still to come.
   - **CPO§Y9:** A to-do point records its origin, such as the audit or
     review that raised it, so a project can see what each audit cost.
 - **CPO§Y10:** Concipio lists every `TODO`, `FIXME`, and `XXX` in code. One
-  that cites a to-do point, `TODO [PROJ§TD12]: ...`, is tracked; one that
-  cites nothing is loose, counted, and held from growing by the baseline
-  [T40], so a project pays its debt down over time.
+  that names a point, `TODO(PROJ§TD12)`, is tracked; one that names none
+  is loose, counted, and held from growing by the baseline [T40], so a
+  project pays its debt down over time. Text after the tag is optional:
+  the point says what the work is, and Concipio lists every site that
+  names it.
+- **CPO§Y19:** A to-do may live in a code comment alone until a second
+  site needs it. Then it becomes a point: `cpo todo promote path:line`
+  adds it as a sub-point of the point covering that code [T65], and
+  rewrites the comment to name it, so the second site can name it too.
 - **CPO§Y11:** `cpo todo` lists open to-do points by owner, priority, or
   age, with links built from a URL template `.cpo` gives for the tracker
   field, `Tracker=JIRA-1234`. Concipio exports what a tracker can import
@@ -113,12 +132,13 @@ work still to come.
   agent reads after its context is compacted: `cpo brief` lists the work
   in flight and who has it [F11].
 
-## Open questions
+## Decisions
 
-- Should a library's contract be checked against its callers'
-  assumptions mechanically, as with typed preconditions, or only by an
-  audit's judgment?
-- Does a to-do point belong in the design doc it concerns, or in one
-  backlog doc per project, as a roadmap?
-- Which names in a section's text count as naming code: only backticked
-  identifiers and paths, or any word that matches a declaration?
+- **CPO§Y20:** A library's contract is checked by judgment, with Concipio
+  keeping the checklist [Y5]. {Decided="Josh" Updated=2026-11-07}
+  Concipio is not a model, so it can only make sure an agent checks
+  every caller, not decide whether a caller is right.
+- **CPO§Y21:** A to-do starts in code and moves into the design when two
+  sites need it [Y19]. {Decided="Josh" Updated=2026-11-07} Most code is
+  now written by agents, so the commands are built for them first, and
+  promotion is one command rather than a hand edit.

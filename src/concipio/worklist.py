@@ -78,7 +78,7 @@ def code_index(root, files):
     return out
 
 
-# Implements [CPO§Y12]
+# Implements [CPO§Y12, CPO§Y18]
 def claimed_code(root, d, index, tracked):
     """The code a unit claims: declarations and files its text names in
     backticks, and the code citing it. A name defined in many places

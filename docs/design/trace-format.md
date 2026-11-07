@@ -46,6 +46,12 @@ overrides a default.
   mapping in the retired list [T36]. A branch stacked on the merged one still
   cites `M50.k3`; when it rebases, Concipio rewrites those citations from the
   recorded mapping. Neither step needs judgment [M36].
+- **CPO§T65:** `cpo elaborate <tag> "<text>"` adds a point under a
+  statement or section, minting its tag so nobody has to: the next free
+  ID in the parent's namespace, never a retired one [T5], or for a
+  numbered section the next sub-number, as `5c.4` under `5c`, with a
+  heading one level deeper. Agents and people refine a design without
+  counting IDs by hand, and promoting a to-do [Y19] is the same step.
 - **CPO§T36:** A tracked list records retired IDs and the final number of
   each merged provisional ID. Concipio checks citations against it without
   needing history, so a shallow clone can tell a retired ID from a new one

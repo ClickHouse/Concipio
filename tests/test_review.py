@@ -85,12 +85,26 @@ def test_spans_widen_split_and_record_deletions(repo):
     assert [s.scope for s in doomed] == [], "doomed was replaced in place, not deleted"
 
 
-def test_given_statements_must_quote_the_design_text(repo, capsys):
+def test_stated_statements_must_quote_the_design_text(repo, capsys):
     run(capsys, "review", "init", "HEAD~1..HEAD", "--design-file", "design.md")
     status, _ = run(capsys, "statement", "add", "--quote", "Volumes shrink.")
     assert status == 1
     status, d = run(capsys, "statement", "add", "--quote", "Volumes   grow online.")
-    assert status == 0 and d["provenance"] == "given"
+    assert status == 0 and d["provenance"] == "stated"
+    status, d = run(capsys, "statement", "add", "--inferred", "--text", "Growth is logged.")
+    assert status == 0 and d["provenance"] == "inferred"
+
+
+def test_a_store_written_with_the_old_terms_reads_with_the_new(tmp_path):
+    from concipio import review
+
+    class Store:
+        dir = tmp_path
+    (tmp_path / "statements.toml").write_text(
+        '[statements.D1]\ntext = "A"\nprovenance = "given"\n'
+        '[statements.D2]\ntext = "B"\nprovenance = "drafted"\n')
+    graph = review.load_graph(Store())
+    assert [s["provenance"] for s in graph["statements"].values()] == ["stated", "inferred"]
 
 
 def test_check_fails_only_on_uncovered_spans(repo, capsys):
@@ -231,7 +245,7 @@ def test_statement_structure_and_kinds(repo, capsys):
         run(capsys, "attach", i, "C1")
     _, d = run(capsys, "check")
     assert d["unimplemented_claims"] == [], "D1 is reached through D4; D2 and D3 need no code"
-    assert d["coverage_by_provenance"]["given"] == {"claims": 2, "other": 2, "implemented": 2}
+    assert d["coverage_by_provenance"]["stated"] == {"claims": 2, "other": 2, "implemented": 2}
     assert d["explained_by_context"] == {ids[1]: ["D3"]}
     _, r = run(capsys, "render")
     text = open(r["path"]).read()

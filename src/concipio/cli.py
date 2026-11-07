@@ -194,10 +194,10 @@ def build_parser():
                       help="longest declaration a hunk widens to (default %(default)s lines)")
 
     st = sub.add_parser("statement", help="design statements").add_subparsers(dest="sub", required=True)
-    sa = add("add", "add a given or drafted statement", st)
-    sa.add_argument("--quote", help="exact text from the design text (a given statement)")
+    sa = add("add", "add a stated or inferred statement", st)
+    sa.add_argument("--quote", help="exact text from the design text (a stated statement)")
     sa.add_argument("--text", help="the statement, if it differs from the quote")
-    sa.add_argument("--drafted", action="store_true", help="a statement written from the code")
+    sa.add_argument("--inferred", action="store_true", help="a statement written from the code")
     sa.add_argument("--parent", help="the statement this one refines, keeping the source's structure")
     sa.add_argument("--kind", choices=review.KINDS, default="claim",
                     help="claim (must be implemented), context, planned, or descriptive")

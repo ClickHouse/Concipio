@@ -11,7 +11,7 @@ make-reviewable skill. Recorded so later runs have a baseline.
   Concipio.
 - **Spans:** 234 (156 RSpec examples, 52 methods, 6 shell functions, 20
   hunks).
-- **Orchestrator:** Claude Opus 5.5. It added 16 given statements from the
+- **Orchestrator:** Claude Opus 5.5. It added 16 stated statements from the
   pull request description, skipping its headings, and drafted 18
   concepts from span scope names without reading the code.
 - **Sweep:** six Claude Haiku sub-agents, one per group of related files,
@@ -66,7 +66,7 @@ statement list repeated on every call. Dropping the statements and adding
 ## Result
 
 `cpo reviewable` exits 0: 234 of 234 spans covered, every concept
-explained, all 16 given statements implemented, and one span unjustified
+explained, all 16 stated statements implemented, and one span unjustified
 (a `require` in a spec).
 
 ## Not yet measured
@@ -89,5 +89,5 @@ about a fifth of re-sweeping all 236 spans at the first sweep's rate. It
 confirmed 27 carried classifications, changed 5, and left two new test
 setup spans unjustified.
 
-`cpo reviewable --strict` now exits 0: every span reaches a given
+`cpo reviewable --strict` now exits 0: every span reaches a stated
 statement, and the rendered design passes `cpo lint`.

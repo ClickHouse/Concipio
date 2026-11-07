@@ -146,12 +146,15 @@ between the lowest design doc and the code.
   nobody documented, or a concept the agent made up; the reviewer decides
   which.
   - **CPO§M42:** A strict check fails on undeclared behavior too, so every
-    changed span must reach a design statement, given or drafted. Drafting
-    a statement to cover it is allowed, and its provenance shows [M38].
-  - **CPO§M38:** Every design statement records its provenance: *given*, from
-    design text that existed before the review, or *drafted*, written by the
-    agent from the code. Coverage is reported against each separately. A
-    drafted statement never hides undeclared behavior [R8].
+    changed span must reach a design statement, stated or inferred.
+    Inferring a statement to cover it is allowed, and its provenance shows
+    [M38].
+  - **CPO§M38:** Every design statement records its provenance: *stated*,
+    quoted from design text the change's author wrote, such as a pull
+    request description, or *inferred*, written by the reviewing agent from
+    the code. Only a stated statement says what the change meant to do, so
+    only it can reveal a mismatch; an inferred one never hides undeclared
+    behavior [R8]. Coverage is reported against each separately.
 - **CPO§M5:** The reverse is also true: Every design statement should trace to
   at least one concept, unless it is context, planned work, or a description
   rather than a claim. A claim with no concept is reported as an
@@ -204,6 +207,13 @@ between the lowest design doc and the code.
   review to the next. Concipio writes such files only where a repository's
   docs do not yet bridge the gap to its code, and for a review that gap is
   only the diff.
+  - **CPO§M53:** What Concipio writes to the store is *glue*: records,
+    rendered reviews, and designs not yet adopted. What the repository
+    checks in is *versioned*, and git carries it across rebases, so
+    Concipio need not. Moving text from glue into versioned docs is
+    adoption, and only versioned docs are documentation. Provenance [M38]
+    and whether a person has signed a text [W17] are separate questions:
+    a stated statement may be glue, and an inferred one versioned.
   - **CPO§M12:** Sweeps are incremental. A diff updates the existing graph; it
     does not rebuild it.
   - **CPO§M39:** Adoption is a ladder, and a repository can stop on any rung:

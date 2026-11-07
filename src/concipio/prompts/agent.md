@@ -20,7 +20,7 @@ Run `cpo review init <base>..<head>`. If the change is stacked on others,
 pass them with `--stacked-on`; they are context, not scope. The output tells
 you whether the repository has adopted Concipio and lists the spans to cover.
 
-## 2. Harvest before you draft
+## 2. Harvest before you infer
 
 Collect the design text that already exists: the pull request description,
 linked issues, commit messages, and any docs the change touches. Add all of
@@ -28,7 +28,7 @@ it with `cpo statement add --quote "<exact text>"`, not only the claims,
 and keep its shape: a summary first, then its points with `--parent`, then
 the claims under each point. Give each a `--kind`: `claim` for what code
 must do, `context` for the problem and background, `planned` for future
-work, and `descriptive` for facts such as measurements. These are *given*
+work, and `descriptive` for facts such as measurements. These are *stated*
 statements. Do not write statements of your own yet.
 
 The top statement is the cornerstone of the review. If the change belongs
@@ -65,8 +65,8 @@ planned work in the design text accounts for an unjustified span, say so:
 Review every proposed concept before adding it with `cpo concept add`. Merge
 duplicates with `cpo concept merge`. If the code does something no statement
 mentions, add a concept for it anyway; `cpo` will report it as undeclared
-behavior, which is what the human needs to see. Draft a statement
-(`cpo statement add --drafted`) only to describe such behavior, never to
+behavior, which is what the human needs to see. Infer a statement
+(`cpo statement add --inferred`) only to describe such behavior, never to
 justify it.
 
 ## 5. Finish

@@ -29,6 +29,10 @@ GRAPH_FILES = {"statements": "statements.toml", "concepts": "concepts.toml",
                "next": "meta.toml"}
 
 
+# Stores written before the terms changed say "given" and "drafted".
+OLD_PROVENANCE = {"given": "stated", "drafted": "inferred"}
+
+
 def load_graph(store):
     """The project's design: statements and concepts, and the counters that
     mint their IDs."""
@@ -36,6 +40,8 @@ def load_graph(store):
     for key, name in GRAPH_FILES.items():
         p = store.dir / name
         graph[key] = tomllib.loads(p.read_text()).get(key, {}) if p.exists() else {}
+    for st in graph["statements"].values():
+        st["provenance"] = OLD_PROVENANCE.get(st.get("provenance"), st.get("provenance"))
     return graph
 
 
@@ -361,18 +367,18 @@ def parser_versions():
 
 # Implements [CPO§V6]
 def cmd_statement_add(r, args):
-    if args.drafted:
+    if args.inferred:
         if not args.text:
-            raise ReviewError("a drafted statement needs --text")
-        statement = {"text": args.text, "provenance": "drafted"}
+            raise ReviewError("an inferred statement needs --text")
+        statement = {"text": args.text, "provenance": "inferred"}
     else:
         if not args.quote:
-            raise ReviewError("a given statement needs --quote, or use --drafted")
+            raise ReviewError("a stated statement needs --quote, or use --inferred")
         quote = normalize(args.quote)
         sources = [d for d in r.manifest["design"] if quote in normalize(d["text"])]
         if not sources:
             raise ReviewError("the quote appears in none of the review's design text")
-        statement = {"text": args.text or args.quote, "provenance": "given",
+        statement = {"text": args.text or args.quote, "provenance": "stated",
                      "quote": args.quote, "source": sources[0]["source"]}
     check_statement_parent(r, args.parent)
     statement["kind"] = args.kind
@@ -598,7 +604,7 @@ def cmd_check(r, args):
     explained_by = {s: d for s, d in r.state.get("explained_by", {}).items()
                     if s in r.state["unjustified"]}
     coverage = {}
-    for prov in ("given", "drafted"):
+    for prov in ("stated", "inferred"):
         claims = [s["id"] for s in mine
                   if s["provenance"] == prov and s.get("kind", "claim") == "claim"]
         others = [s["id"] for s in mine
@@ -746,7 +752,7 @@ def carry(store, old_id, new_id):
     snapshots = [normalize(d["text"]) for d in new.manifest["design"]]
     dropped = []
     for st in old.statements():
-        if st["provenance"] == "given" and not any(normalize(st["quote"]) in t for t in snapshots):
+        if st["provenance"] == "stated" and not any(normalize(st["quote"]) in t for t in snapshots):
             dropped.append(st["id"])
             continue
         st.setdefault("reviews", [st.get("review")])
@@ -894,7 +900,7 @@ def cmd_render(r, args):
         text = re.sub(r"[^\w\- ]", "", heading.lower())
         return text.replace(" ", "-")
 
-    # Statements follow the design text's own order; drafted ones follow it.
+    # Statements follow the design text's own order; inferred ones follow it.
     snapshot = " ".join(normalize(d["text"]) for d in r.manifest["design"])
 
     def in_source_order(sid):

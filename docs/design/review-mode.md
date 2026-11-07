@@ -66,8 +66,8 @@ runs the same on a repository that will never adopt Concipio.
 - **CPO§V6:** The agent splits the design text into statements with
   `cpo statement add`, quoting the text each statement comes from. Concipio
   rejects a quote that does not appear in a snapshot. Such statements are
-  *given* [M38]. A statement the agent writes from the code instead is
-  *drafted*, and carries no quote.
+  *stated* [M38]. A statement the agent writes from the code instead is
+  *inferred*, and carries no quote.
   - **CPO§V31:** Harvesting keeps all of the design text and its structure.
     Each statement may name a parent statement, so a summary, its numbered
     points, and the claims under each point keep their shape. Each has a
@@ -111,7 +111,7 @@ runs the same on a repository that will never adopt Concipio.
   quote match, or failing that when its path and scope match exactly one
   span; it keeps its ID, so claims that cite it stay true. A carried span
   whose code changed returns to the remaining work, with its old attachment
-  shown, until an agent confirms or replaces it. Given statements carry only
+  shown, until an agent confirms or replaces it. Stated statements carry only
   if their quotes still appear in the new design text.
 
 ## The graph
@@ -140,7 +140,7 @@ runs the same on a repository that will never adopt Concipio.
 | Command | Effect |
 |---|---|
 | `cpo review init <base>..<head>` | Write the manifest [V4] and list the spans |
-| `cpo statement add` | Add a given or drafted statement [V6] |
+| `cpo statement add` | Add a stated or inferred statement [V6] |
 | `cpo concept add`, `cpo concept edit` | Add or change a concept [M31] |
 | `cpo concept merge` | Combine two concepts, recorded as such; `concept edit` renames [R2] |
 | `cpo attach`, `cpo detach` | Join a span to a concept, or undo it [V13] |
@@ -198,8 +198,8 @@ runs the same on a repository that will never adopt Concipio.
 - **CPO§V17:** `cpo check` gives the verdicts of [M21]:
   - *Traced* fails while any span in scope is neither attached nor marked
     unjustified. It reports undeclared behavior [M4] and unimplemented claims
-    [M5] without failing on them, and reports coverage against given and
-    drafted statements separately [M38].
+    [M5] without failing on them, and reports coverage against stated and
+    inferred statements separately [M38].
   - *Explained* fails while any concept lacks a claim, or has a claim that
     cites none of its attached spans.
 - **CPO§V18:** `cpo status` reports what remains and how it changed since
@@ -222,13 +222,13 @@ runs the same on a repository that will never adopt Concipio.
   1. Set the scope and run `cpo review init` [V4].
   2. Harvest the design text that already exists, such as the pull request
      description, linked issues, commit messages, and docs, and add it as
-     given statements [V6]. Harvest before drafting [R8].
+     stated statements [V6]. Harvest before inferring [R8].
   3. Settle the top-level concepts: from the repository's docs if it has
      adopted Concipio [V23], from the human if they will say, and otherwise
      by proposing them [M40, R15].
   4. Sweep: sub-agents attach each span to a concept, propose a new one, or
      mark the span unjustified. The large model reviews proposed concepts
-     before they are added. Draft statements only for undeclared behavior
+     before they are added. Infer statements only for undeclared behavior
      [M4].
   5. Repeat `cpo check` and `cpo status` until both verdicts pass. On a
      stall, stop and report it [V18].
@@ -267,6 +267,6 @@ runs the same on a repository that will never adopt Concipio.
   splits into many spans; too large, and one concept covers a screenful of
   code [R4].
 - Should design text that lives outside the repository, such as a ticket,
-  need anything beyond a snapshot to count as given [V6]?
+  need anything beyond a snapshot to count as stated [V6]?
 - How do two teammates' kept concepts merge when both import into one store
   [V12, R2]?

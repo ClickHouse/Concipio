@@ -120,7 +120,7 @@ def test_a_large_declaration_is_claimed_only_where_the_unit_points(tmp_path, mon
     repo, defs, store = project(tmp_path, monkeypatch)
     monkeypatch.setenv("CPO_AGENT", "a1")
     body = [f"  x{i} = {i};" for i in range(100)]
-    body[50] = "  /* D§2: the log entry is appended here */"
+    body[50] = "  /* D§2: the log entry: appended here */"
     (repo / "src/big.c").write_text("void big(void) {\n" + "\n".join(body) + "\n}\n")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "big"],
@@ -135,6 +135,12 @@ def test_a_large_declaration_is_claimed_only_where_the_unit_points(tmp_path, mon
     body[52] = "  x52 = 520;"
     (repo / "src/big.c").write_text("void big(void) {\n" + "\n".join(body) + "\n}\n")
     assert worklist.status(repo, store, defs, "trial")["counts"].get("stale") == 1
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qam",
+                    "Set x52"], cwd=repo, check=True)
+    out = worklist.why_stale(repo, defs, worklist.Audit(store, "trial").load(), "D§2")
+    [code] = [c for c in out["changes"] if c["what"] == "code"]
+    assert [c.split(" ", 1)[1] for c in code["commits"]] == ["Set x52"], \
+        "a window whose first line holds a colon still finds its commits"
 
 
 def test_code_a_unit_stops_naming_is_no_longer_claimed_not_removed(tmp_path, monkeypatch):
@@ -148,3 +154,10 @@ def test_code_a_unit_stops_naming_is_no_longer_claimed_not_removed(tmp_path, mon
     _, defs, _ = docs.load(root=repo)
     out = worklist.why_stale(repo, defs, worklist.Audit(store, "trial").load(), "D§1")
     assert {c["what"] for c in out["changes"]} == {"text", "no longer claimed"}
+
+
+def test_a_reworded_sentence_shows_only_its_changed_words():
+    out = worklist.prose_diff(
+        "The ring is sized per slot. It cannot be exhausted. Takers wait.",
+        "The ring is sized per slot. It cannot be exhausted by fills. Takers wait.")
+    assert out == "~ It cannot be [-exhausted.-] {+exhausted by fills.+}"

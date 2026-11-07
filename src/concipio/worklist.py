@@ -408,6 +408,45 @@ def span_of(root, d):
     return d.line, len(lines)
 
 
+SENTENCE = re.compile(r"(?<=[.;:!?])\s+(?=\S)|\n+")
+
+
+def prose_diff(old, new):
+    """What changed in a unit's text, sentence by sentence, with the words
+    changed marked as `git diff --word-diff` marks them: a sentence kept
+    is left out, one removed or added is shown whole, and one reworded is
+    shown with [-old-]{+new+} around its changes."""
+    import difflib
+    a = [x for x in SENTENCE.split(old) if x.strip()]
+    b = [x for x in SENTENCE.split(new) if x.strip()]
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        if op == "delete":
+            out += [f"- {x}" for x in a[i1:i2]]
+        elif op == "insert":
+            out += [f"+ {x}" for x in b[j1:j2]]
+        else:
+            out.append("~ " + word_diff(" ".join(a[i1:i2]), " ".join(b[j1:j2])))
+    return "\n".join(out)
+
+
+def word_diff(old, new):
+    import difflib
+    a, b = old.split(), new.split()
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "equal":
+            out += a[i1:i2]
+            continue
+        if i2 > i1:
+            out.append("[-" + " ".join(a[i1:i2]) + "-]")
+        if j2 > j1:
+            out.append("{+" + " ".join(b[j1:j2]) + "+}")
+    return " ".join(out)
+
+
 def declared(root, key):
     """Whether the declaration a part's key names exists in a tree."""
     path, _, rest = key.partition(":")
@@ -427,6 +466,7 @@ def commits_since(root, sha, path, lines=None):
         args = ["git", "log", "--no-merges", "--format=%h %s", f"{sha}..HEAD", "--", path]
     out = subprocess.run(args, cwd=root, capture_output=True, text=True).stdout
     return [l for l in out.splitlines() if l.strip()]
+
 
 
 # Implements [CPO§W38]
@@ -462,21 +502,22 @@ def why_stale(root, defs, state, tag, context=3):
     if old[0] != new[0]:
         changes.append({"what": "text", "where": f"{new[2]} {tag}",
                         "commits": commits_since(root, rec["sha"], new[2], new[3]),
-                        "diff": diff(old[0], new[0], tag)})
+                        "diff": prose_diff(old[0], new[0])})
     for key in sorted(set(old[1]) | set(new[1])):
         a, b = old[1].get(key), new[1].get(key)
         if (a and a[0]) == (b and b[0]):
             continue
-        path = key.rsplit(":", 1)[0]
+        path = key.split(":", 1)[0]
         if a and b:
             what = "code"
         elif b:
             what = "newly claimed" if key in existed else "added"
         else:
             what = "no longer claimed" if declared(root, key) else "removed"
+        commits = commits_since(root, rec["sha"], path, b[1:] if b else None)
         changes.append({"what": what,
                         "where": key,
-                        "commits": commits_since(root, rec["sha"], path, b[1:] if b else None),
+                        "commits": commits,
                         "diff": diff(a[0] if a else "", b[0] if b else "", key)})
     added, gone = sorted(new[4] - old[4]), sorted(old[4] - new[4])
     if added or gone:

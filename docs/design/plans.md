@@ -14,9 +14,14 @@ some to each compaction, briefed every helper by hand, and showed no
 progress in any number Concipio reports
 ([the adoption's account](../consultations/2026-11-07-first-adoption.md)).
 This doc specifies plans, claimable lists of work that agents share, and
-audits, the plans that check a design against its code. It builds on the
-kinds of design point [Y1, Y12, Y14], the store [V22], and the helper
-reports [T51, T53, T58, T63].
+audits, the plans that check a design against its code.
+
+A plan does not replace the to-do list a harness keeps for an agent's
+current task, which already serves that task well. It multiplies that
+list by every design point a project has: one row for each concept,
+shared among agents, kept between sessions, and checked against the
+code. It builds on the kinds of design point [Y1, Y12, Y14], the store
+[V22], and the helper reports [T51, T53, T58, T63].
 
 ## Why agents keep their state here
 
@@ -29,8 +34,10 @@ reports [T51, T53, T58, T63].
   verified items have gone stale, which another agent holds, and how far
   the plan has come [W13].
 - **CPO§W24:** State survives compaction without anyone remembering it.
-  After a compaction the agent runs `cpo plan join` again [W31], which a
-  harness hook can do for it.
+  After a compaction the agent runs `cpo plan join` again [W31]. A large
+  model's summary keeps its use of Concipio fresh enough to do that
+  unprompted; a harness hook that runs it is a convenience, not a
+  requirement.
 - **CPO§W25:** A project keeps its own ledgers. Concipio reads a table
   `.cpo` names, such as a defect ledger with a column of section
   references, and adds staleness to its rows, and adds no required
@@ -176,6 +183,14 @@ reports [T51, T53, T58, T63].
   what has gone stale since; and which claims, findings, and questions
   are open. An adoption's first weeks show their work here, long before
   citations move coverage [Y13].
+- **CPO§W37:** `cpo status` says where a person or agent stands, as
+  `git status` does in the middle of a rebase: first the work in
+  flight, each plan joined and how far it has come, and any review in
+  progress [V18]; then the score and its problems [M50]. The share
+  verified stays apart from the score, so nobody reads "2,648 to-dos
+  remain" without first learning that an audit is halfway through them.
+  The score moves from `cpo audit` to `cpo status`, and `cpo audit`
+  means only audits [W15].
 
 ## First trial
 
@@ -184,12 +199,3 @@ reports [T51, T53, T58, T63].
   to real questions. It runs with and without the design text in the
   brief, on a small model and on a large one, and the four runs are
   compared by findings, false leads, and tokens.
-
-## Open questions
-
-- Should the share verified count toward the score [M50], or stand
-  beside it as coverage does?
-- `cpo audit` already scores the docs [M50]. Should the score become
-  `cpo score`, so `cpo audit` means only audits?
-- Which harnesses can run a hook after compaction, and what does an
-  agent on one that cannot do instead?

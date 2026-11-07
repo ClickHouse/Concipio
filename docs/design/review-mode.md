@@ -202,7 +202,8 @@ runs the same on a repository that will never adopt Concipio.
     inferred statements separately [M38].
   - *Explained* fails while any concept lacks a claim, or has a claim that
     cites none of its attached spans.
-- **CPO§V18:** `cpo status` reports what remains and how it changed since
+- **CPO§V18:** `cpo status` reports what remains of the current review,
+  among the work in flight it lists first [W37], and how it changed since
   the last check. It reports a stall when what remains has not shrunk for a
   number of commands set in the manifest, or when the log shows the same span
   attached and detached repeatedly [R11].

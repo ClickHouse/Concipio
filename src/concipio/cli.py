@@ -474,7 +474,7 @@ def describe_changes(changes):
         out += [f"  {line}" for line in c["commits"][:8]]
         if len(c["commits"]) > 8:
             out.append(f"  ... and {len(c['commits']) - 8} more commits")
-        out += [c["diff"], ""]
+        out += [c["diff"], ""] if c["diff"] else []
     return out
 
 

@@ -90,3 +90,27 @@ def test_a_stale_unit_says_what_changed_and_in_which_commits(tmp_path, monkeypat
     assert "-  return 0;" in change["diff"] and "+  return -1;" in change["diff"]
     brief = worklist.next_unit(repo, store, defs, "trial")
     assert brief["unit"] == "D§1" and brief["changed"][0]["where"] == "src/ring.c:ring_take"
+
+
+def test_why_lists_only_commits_to_the_unit_and_collapses_bare_citations(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    worklist.record(repo, store, defs, "trial", "D§1", "verified")
+
+    def commit(msg):
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", msg],
+                       cwd=repo, check=True)
+    text = (repo / "DESIGN.md").read_text()
+    (repo / "DESIGN.md").write_text(text.replace("append-only", "append-only, never rewritten"))
+    commit("Reword the log")
+    (repo / "DESIGN.md").write_text((repo / "DESIGN.md").read_text().replace(
+        "`ring_take` refuses.", "`ring_take` refuses, and says so."))
+    commit("Say how the ring refuses")
+    (repo / "mutants.sh").write_text("# mutant 4: breaks D§1\nexit 0\n")
+    commit("Add a mutant")
+    _, defs, _ = docs.load(root=repo)
+    out = worklist.why_stale(repo, defs, worklist.Audit(store, "trial").load(), "D§1")
+    by = {c["what"]: c for c in out["changes"]}
+    assert [c.split(" ", 1)[1] for c in by["text"]["commits"]] == ["Say how the ring refuses"]
+    assert by["citations"]["where"] == "+mutants.sh:1" and "added" not in by

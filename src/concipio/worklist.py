@@ -332,21 +332,46 @@ def print_at(root, defs, tag, at=None):
 
 
 def parts(root, unit):
-    """A unit's text, and its code by file and declaration, so two
-    versions can be compared piece by piece."""
+    """A unit's text, its code by file and declaration with the lines each
+    spans, and the lone comment lines that cite it, so two versions can be
+    compared piece by piece."""
     d, regions, _ = unit
-    code = {}
+    code, mentions = {}, set()
     for path, start, end in regions:
         found = decls_of(root, path)
         name = next((n for a, b, k, n, _ in found[0] if a == start), None) if found else None
-        code[f"{path}:{name or start}"] = region_text(root, (path, start, end))
-    return d.text, code, d.path
+        if name is None and start == end:
+            # A citation in a comment that documents no declaration, such
+            # as a line of metadata, is a mention, not code [W38].
+            mentions.add(f"{path}:{start}")
+            continue
+        code[f"{path}:{name or start}"] = (region_text(root, (path, start, end)), start, end)
+    return d.text, code, d.path, span_of(root, d), mentions
 
 
-def commits_since(root, sha, path):
-    out = subprocess.run(["git", "log", "--format=%h %s", f"{sha}..HEAD", "--", path], cwd=root,
-                         capture_output=True, text=True).stdout.splitlines()
-    return out
+def span_of(root, d):
+    """The lines a unit's own text spans: a section's heading through the
+    line before the next heading, or a statement's own lines."""
+    if not d.heading:
+        return d.line, d.line + d.lines - 1
+    lines = (root / d.path).read_text(errors="replace").splitlines()
+    for n, line in docs.prose_lines("\n".join(lines)):
+        if n > d.line and docs.HEADING.match(line):
+            return d.line, n - 1
+    return d.line, len(lines)
+
+
+def commits_since(root, sha, path, lines=None):
+    """The commits since `sha` that changed these lines of a file, as they
+    stand now, or the whole file. Merges that only carried a change are
+    left out."""
+    if lines:
+        args = ["git", "log", "--no-merges", "--format=%h %s", "-s",
+                f"-L{lines[0]},{lines[1]}:{path}", f"{sha}..HEAD"]
+    else:
+        args = ["git", "log", "--no-merges", "--format=%h %s", f"{sha}..HEAD", "--", path]
+    out = subprocess.run(args, cwd=root, capture_output=True, text=True).stdout
+    return [l for l in out.splitlines() if l.strip()]
 
 
 # Implements [CPO§W38]
@@ -361,9 +386,14 @@ def why_stale(root, defs, state, tag, context=3):
     now = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
     if not now:
         return {"error": f"{tag} is not a unit of this audit"}
+    behind = subprocess.run(["git", "merge-base", "--is-ancestor", rec["sha"], "HEAD"],
+                            cwd=root, capture_output=True).returncode
+    if behind:
+        return {"error": f"{tag} was checked at {rec['sha']}, which this checkout does not "
+                         "contain; run from a checkout that does, or it reads as changed"}
     with checkout_at(root, rec["sha"]) as tmp:
         then = unit_at(tmp, tag)
-        old = parts(tmp, then) if then else ("", {}, now[0][0].path)
+        old = parts(tmp, then) if then else ("", {}, now[0][0].path, None, set())
     new = parts(root, now[0])
 
     def diff(a, b, label):
@@ -373,16 +403,21 @@ def why_stale(root, defs, state, tag, context=3):
     changes = []
     if old[0] != new[0]:
         changes.append({"what": "text", "where": f"{new[2]} {tag}",
-                        "commits": commits_since(root, rec["sha"], new[2]),
+                        "commits": commits_since(root, rec["sha"], new[2], new[3]),
                         "diff": diff(old[0], new[0], tag)})
     for key in sorted(set(old[1]) | set(new[1])):
         a, b = old[1].get(key), new[1].get(key)
-        if a == b:
+        if (a and a[0]) == (b and b[0]):
             continue
         path = key.rsplit(":", 1)[0]
         changes.append({"what": "code" if a and b else "added" if b else "removed",
-                        "where": key, "commits": commits_since(root, rec["sha"], path),
-                        "diff": diff(a or "", b or "", key)})
+                        "where": key,
+                        "commits": commits_since(root, rec["sha"], path, b[1:] if b else None),
+                        "diff": diff(a[0] if a else "", b[0] if b else "", key)})
+    added, gone = sorted(new[4] - old[4]), sorted(old[4] - new[4])
+    if added or gone:
+        changes.append({"what": "citations", "where": ", ".join(
+            [f"+{m}" for m in added] + [f"-{m}" for m in gone]), "commits": [], "diff": ""})
     return {"unit": tag, "checked": rec["sha"], "status": rec["status"], "changes": changes}
 
 

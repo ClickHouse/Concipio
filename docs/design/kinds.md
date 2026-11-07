@@ -9,16 +9,39 @@ describes one mechanism should claim a bounded stretch of code and be
 tested. A library routine serves many mechanisms and owes its callers a
 contract. Deferred work needs an owner and goes stale. Treating them all
 alike either leaves the library and the debt unsupported or holds them to
-rules that do not fit. This doc gives each kind its own rules, and defines
-the unit of work an audit takes [W2].
+rules that do not fit. This doc gives each kind its own rules, defines
+the unit of work an audit takes [W2], and marks which points describe
+work still to come.
 
 ## Kinds
 
 - **CPO§Y1:** A statement or section may carry a `Kind` field:
-  `mechanism`, `library`, or `todo`. Each kind has its own obligations,
-  checked as schemas are [F4, F5], applied by kind rather than by doc. A
-  leaf point is a mechanism unless it says otherwise; a project may add
-  kinds of its own.
+  `mechanism`, `library`, `todo`, or `workstream`. Each kind has its own
+  obligations, checked as schemas are [F4, F5], applied by kind rather
+  than by doc. A leaf point is a mechanism unless it says otherwise; a
+  project may add kinds of its own.
+
+## What is and what will be
+
+- **CPO§Y14:** A design describes what will be as well as what is. A
+  point may carry `Status=planned` or `Status=in-progress`; one with
+  neither describes the code as it stands. Planned points are a
+  roadmap's items [W35], which agents claim and work through a plan.
+- **CPO§Y15:** When planned work lands, its point drops the status and
+  becomes a claim about the code as it stands, which puts it in the
+  queue of any audit covering it [W2]: plan, build, verify, then cite
+  [Y13]. A to-do point [Y8] differs in origin, not in handling: it is
+  deferred work someone found, where a planned point is work someone
+  designed.
+
+## Workstreams
+
+- **CPO§Y16:** A workstream is a section marked `Kind=workstream`, which
+  lists the plans in flight under it, one bullet each, linking to each
+  plan's log [W29]. A project may keep one at the top of its master, or
+  one under each part of the design, and Concipio files a new plan
+  under the nearest one above its target [W30]. Completed plans move to
+  the workstream's list of completed ones.
 
 ## The code a point claims
 

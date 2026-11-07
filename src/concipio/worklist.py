@@ -80,15 +80,14 @@ def code_index(root, files):
 
 # Implements [CPO§Y12, CPO§Y18]
 def claimed_code(root, d, index, tracked):
-    """The code a unit claims: declarations and files its text names in
-    backticks, and the code citing it. A name defined in many places
-    names none of them."""
+    """The code a unit claims: declarations its text names in backticks,
+    and the code citing it. A name defined in many places names none of
+    them. A file the text names is a pointer, not a claim on the whole
+    file [CPO§W2]."""
     regions = set()
     for m in TICKED.finditer(d.text):
         token = m.group(1).strip().rstrip("()")
-        if PATHLIKE.match(token) and token in tracked:
-            regions.add((token, None, None))
-        elif re.fullmatch(r"[A-Za-z_]\w*", token) and 0 < len(index.get(token, ())) <= 3:
+        if re.fullmatch(r"[A-Za-z_]\w*", token) and 0 < len(index.get(token, ())) <= 3:
             regions.update(index[token])
     for c in d.citations:
         if c.path.endswith(".md"):
@@ -104,16 +103,23 @@ _decls = {}
 
 
 def decls_of(root, path):
-    """A code file's declarations and lines, read once."""
-    if path not in _decls:
+    """A code file's declarations and lines, read once per checkout."""
+    key = (str(root), path)
+    if key not in _decls:
         try:
             text = (root / path).read_text(errors="replace")
         except (FileNotFoundError, IsADirectoryError):
-            _decls[path] = None
+            _decls[key] = None
             return None
         lang = spans.language_of(path, text)
-        _decls[path] = (spans.declarations(lang, text), text.splitlines()) if lang else None
-    return _decls[path]
+        _decls[key] = (spans.declarations(lang, text), text.splitlines()) if lang else None
+    return _decls[key]
+
+
+def pointers(d, tracked):
+    """The files a unit's text names, for the brief to point at."""
+    return sorted({m.group(1).strip() for m in TICKED.finditer(d.text)
+                   if PATHLIKE.match(m.group(1).strip()) and m.group(1).strip() in tracked})
 
 
 def region_text(root, region):
@@ -188,6 +194,7 @@ def survey(root, defs, scope=()):
     out = []
     for d in units(root, defs, scope):
         regions = claimed_code(root, d, index, tracked)
+        d.pointers = pointers(d, tracked)
         out.append((d, regions, unit_print(root, d, regions)))
     return out
 
@@ -249,29 +256,57 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
         code.append({"where": where, "text": text})
     before = state["units"].get(d.tag)
     return {"audit": name, "unit": d.tag, "name": d.name, "where": f"{d.path}:{d.line}",
-            "text": d.text, "code": code, "before": before, "holder": me,
+            "text": d.text, "code": code, "pointers": d.pointers, "before": before,
+            "holder": me,
             "until": now + CLAIM_SECONDS}
 
 
 # Implements [CPO§W10]
-def record(root, store, defs, name, tag, status, note=None, to=None):
+def record(root, store, defs, name, tag, status, note=None, to=None, at=None):
     """Record a unit's outcome against the fingerprints it was checked at,
-    and release its claim."""
+    and release its claim. With `at`, the check was made at an earlier
+    commit: the unit is fingerprinted there, so it shows stale at once if
+    it has changed since [CPO§W21]."""
     me, _ = agent()
     audit = Audit(store, name)
+    fp, sha, err = print_at(root, defs, tag, at)
+    if err:
+        return {"error": err}
     with store.lock():
         state = audit.load()
-        match = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
-        if not match:
-            return {"error": f"{tag} is not a unit of this audit"}
-        d, regions, fp = match[0]
-        state["units"][tag] = {"status": status, "print": fp, "sha": head(root),
+        state["units"][tag] = {"status": status, "print": fp, "sha": sha,
                                "by": me or "unknown", "note": note, "for": to,
                                "at": int(time.time())}
         state["claims"].pop(tag, None)
         audit.save(state)
-    audit.log({"event": status, "unit": tag, "by": me, "note": note})
-    return {"audit": name, "unit": tag, "status": status, "sha": head(root)}
+    audit.log({"event": status, "unit": tag, "by": me, "note": note, "sha": sha})
+    return {"audit": name, "unit": tag, "status": status, "sha": sha}
+
+
+def print_at(root, defs, tag, at=None):
+    """A unit's fingerprint and commit, here or at an earlier commit, read
+    from a temporary checkout of it. Returns (print, sha, error)."""
+    import tempfile
+    if not at:
+        match = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
+        return (match[0][2], head(root), None) if match else \
+            (None, None, f"{tag} is not a unit of this audit")
+    sha = subprocess.run(["git", "rev-parse", "--short=12", "--verify", f"{at}^{{commit}}"],
+                         cwd=root, capture_output=True, text=True).stdout.strip()
+    if not sha:
+        return None, None, f"{at} is not a commit"
+    tmp = Path(tempfile.mkdtemp(prefix="cpo-at-")) / "tree"
+    subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(tmp), sha],
+                   cwd=root, check=True, capture_output=True)
+    try:
+        _, then, _ = docs.load(root=tmp)
+        match = [u for u in survey(tmp, then, (tag,)) if u[0].tag == tag]
+        if not match:
+            return None, None, f"{tag} was not a unit at {sha}"
+        return match[0][2], sha, None
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(tmp)], cwd=root,
+                       capture_output=True)
 
 
 # Implements [CPO§W13]

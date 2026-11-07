@@ -157,6 +157,8 @@ def build_parser():
     out.add_argument("--finding", metavar="TEXT", help="for done: what is wrong, and where")
     out.add_argument("--question", metavar="TEXT", help="for done: what a person must decide")
     au.add_argument("--for", dest="to", metavar="WHO", help="for done --question: whom it is for")
+    au.add_argument("--at", metavar="SHA",
+                    help="for done: the commit the check was made at, if not HEAD")
     au.add_argument("--against", metavar="REV",
                     help="compare with another commit, and exit 1 if the score got worse")
     au.add_argument("--list", action="store_true", help="list each problem, not just the counts")
@@ -489,6 +491,8 @@ def cmd_worklist(args, defs, repo):
                              "yourself)")
             else:
                 lines += [f"--- {c['where']}", c["text"]]
+        if b["pointers"]:
+            lines.append("It points to: " + ", ".join(b["pointers"]))
         if not b["code"]:
             lines.append("It names and cites no code Concipio can find; check it against the "
                          "code yourself.")
@@ -501,7 +505,7 @@ def cmd_worklist(args, defs, repo):
             raise SystemExit("cpo audit done NAME UNIT needs --verified, --finding, or --question")
         st = "verified" if args.verified else "finding" if args.finding else "question"
         r = worklist.record(repo, store, defs, args.name, args.unit, st,
-                            args.finding or args.question, args.to)
+                            args.finding or args.question, args.to, args.at)
         emit(r, r.get("error") or f"{args.unit}: {st} at {r['sha']}.", args.json)
         return 1 if r.get("error") else 0
     r = worklist.status(repo, store, defs, args.name, only_me=args.action == "mine")

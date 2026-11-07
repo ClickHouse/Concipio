@@ -35,7 +35,8 @@ def test_agents_claim_distinct_units_and_see_the_code_they_name(tmp_path, monkey
     assert worklist.next_unit(repo, store, defs, "trial")["unit"] == "D§1", "a1 resumes its claim"
     monkeypatch.setenv("CPO_AGENT", "a2")
     second = worklist.next_unit(repo, store, defs, "trial")
-    assert second["unit"] == "D§2" and second["code"][0]["where"] == "src/log.c"
+    assert second["unit"] == "D§2" and second["code"] == [] and second["pointers"] == [
+        "src/log.c"], "a named file is a pointer, not a claim on the whole file"
 
 
 def test_a_verified_unit_goes_stale_when_the_code_it_names_changes(tmp_path, monkeypatch):
@@ -57,3 +58,18 @@ def test_an_agent_concipio_cannot_identify_is_told_how_to_name_itself(tmp_path, 
     monkeypatch.setattr(worklist, "agent", lambda: (None, "no harness found"))
     out = worklist.next_unit(repo, store, defs, "trial")
     assert "export CPO_AGENT=" in out["error"]
+
+
+def test_a_check_made_at_an_earlier_commit_shows_stale_at_once(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    first = worklist.head(repo)
+    (repo / "src/ring.c").write_text("int ring_take(void) {\n  return -1;\n}\n")
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qam", "b"],
+                   cwd=repo, check=True)
+    out = worklist.record(repo, store, defs, "trial", "D§1", "verified", at=first)
+    assert out["sha"] == first
+    assert worklist.status(repo, store, defs, "trial")["counts"]["stale"] == 1
+    worklist.record(repo, store, defs, "trial", "D§2", "verified", at=first)
+    assert worklist.status(repo, store, defs, "trial")["counts"]["verified"] == 1, \
+        "a unit unchanged since the earlier commit stays verified"

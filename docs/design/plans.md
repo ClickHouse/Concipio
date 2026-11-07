@@ -124,14 +124,18 @@ code. It builds on the kinds of design point [Y1, Y12, Y14], the store
 - **CPO§W2:** An audit's unit is a design point with the code it claims
   [Y12]: a mechanism, a library, or, before anything cites the design, a
   section and the code it names. The breadth and section limits keep a
-  unit small enough to read whole [M49, M41].
+  unit small enough to read whole [M49, M41]. A file a section names is
+  a pointer the brief shows, not a claim on the whole file, which would
+  make a section that mentions a large file stale at every commit.
   - **CPO§W4:** A look-alike cluster joins the unit of any of its copies,
     whole, and its differences are the unit's checklist [T53].
 - **CPO§W21:** A unit is verified when an agent or a person has checked
   its claims against its code: "checked against `<sha>` by `<who>`". The
   record goes stale when the unit's text, or code it names or cites,
   changes. This extends `Verified` [F16] to every point, and needs no
-  citation to work.
+  citation to work. A check made at an earlier commit is recorded at
+  that commit, `--at <sha>`, and shows stale at once if the unit has
+  changed since, so earlier work is neither lost nor overstated.
 - **CPO§W12:** An audit's findings become items of the same plan: a fix,
   then the corrected prose, after which the unit is verified and ready
   to cite [Y13]. A finding the team has no cycles for becomes a to-do

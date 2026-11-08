@@ -79,9 +79,19 @@ def lint(root, files, defs, statement_limit=STATEMENT_LIMIT, section_limit=SECTI
 # Implements [CPO§T73]
 def broken_links(root, files):
     """Links from a doc to a file in the repository that does not exist,
-    which a reader follows into nothing."""
+    or to a heading its target does not have, which a reader follows into
+    nothing."""
     present = set(files) | {posixpath.dirname(f) for f in files}
     every = {f for f in files}
+    anchors = {}
+
+    def has_anchor(target, frag):
+        if target not in anchors:
+            try:
+                anchors[target] = anchors_of((root / target).read_text(errors="replace"))
+            except (FileNotFoundError, IsADirectoryError):
+                anchors[target] = None
+        return anchors[target] is None or frag.lower() in anchors[target]
     out = []
     for f in files:
         if not docs.is_doc(f):
@@ -89,21 +99,50 @@ def broken_links(root, files):
         text = (root / f).read_text(errors="replace")
         for n, line in docs.prose_lines(text):
             for m in LINK.finditer(line):
-                raw = (m.group(1) or m.group(2) or "").split("#", 1)[0]
-                if not raw or re.match(r"^[a-z][\w+.-]*:", raw) or raw.startswith("/"):
+                whole = m.group(1) or m.group(2) or ""
+                raw, _, frag = whole.partition("#")
+                if re.match(r"^[a-z][\w+.-]*:", raw) or raw.startswith("/"):
                     continue
                 # A citation such as `[Y12]: ...` at the start of a line reads
                 # like a link definition; only a path-like target is a link.
-                if m.group(2) and not re.search(r"[./]", raw):
+                if m.group(2) and not re.search(r"[./#]", whole):
+                    continue
+                if not raw:
+                    if frag and not has_anchor(f, frag):
+                        out.append(Problem(f, n, "broken-link", f"links to #{frag}, a heading "
+                                           "this doc does not have", whole, 1))
                     continue
                 # A link to a line, `src/ring.c:15`, links to the file.
                 raw = re.sub(r":\d+(-\d+)?$", "", raw)
                 target = posixpath.normpath(posixpath.join(posixpath.dirname(f), raw))
-                if target in present or (root / target).exists() or \
-                        any(e.startswith(target.rstrip("/") + "/") for e in every):
-                    continue
-                out.append(Problem(f, n, "broken-link",
-                                   f"links to {raw}, which does not exist", raw, 1))
+                if not (target in present or (root / target).exists() or
+                        any(e.startswith(target.rstrip("/") + "/") for e in every)):
+                    out.append(Problem(f, n, "broken-link",
+                                       f"links to {raw}, which does not exist", raw, 1))
+                elif frag and docs.is_doc(target) and not has_anchor(target, frag):
+                    out.append(Problem(f, n, "broken-link", f"links to {raw}#{frag}, but "
+                                       f"{raw} has no heading #{frag}", whole, 1))
+    return out
+
+
+EXPLICIT_ANCHOR = re.compile(r"\{#([\w-]+)\}|<a\s+(?:name|id)=[\"']([^\"']+)[\"']")
+
+
+def anchors_of(text):
+    """The anchors a doc's headings make, as GitHub and most doc sites
+    spell them, and any it names itself, as `{#id}` or `<a id="...">`."""
+    out, seen = set(), {}
+    for _, line in docs.prose_lines(text):
+        for m in EXPLICIT_ANCHOR.finditer(line):
+            out.add((m.group(1) or m.group(2)).lower())
+        h = HEADING.match(line)
+        if not h:
+            continue
+        title = re.sub(r"\{#[\w-]+\}|<[^>]+>", "", h.group(2)).strip()
+        slug = re.sub(r"[^\w\- ]", "", title.lower()).replace(" ", "-")
+        n = seen.get(slug, 0)
+        seen[slug] = n + 1
+        out.add(slug if n == 0 else f"{slug}-{n}")
     return out
 
 

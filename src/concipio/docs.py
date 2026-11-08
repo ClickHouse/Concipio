@@ -453,7 +453,13 @@ def heading_definitions(root, src, defs, errors, pattern=None):
         name = re.split(r"\s+(?:—\s*)?\*\(|\s+—\s+\*|\s+\(\*", name)[0].strip() or name
         d = Definition(tag, path, i + 1, " ".join(l.strip() for l in body), name,
                        lines=len(body), heading=True, fields=fields)
-        if stack:
+        # A section's number names its parent, as 5c.1's is 5c and 1a's
+        # is 1, whatever its heading's level; heading nesting decides only
+        # where the number does not [T39].
+        above = numbered_parent(m["id"])
+        if above and f"{src['prefix']}§{above}" in defs:
+            d.parent = f"{src['prefix']}§{above}"
+        elif stack:
             d.parent = stack[-1][1]
         if tag in defs:
             errors.append(f"{tag} is defined twice: {defs[tag].path}:{defs[tag].line} "
@@ -461,6 +467,17 @@ def heading_definitions(root, src, defs, errors, pattern=None):
         else:
             defs[tag] = d
         stack.append((level, tag))
+
+
+def numbered_parent(ident):
+    """The section a number belongs under: 5c for 5c.1, 4a for 4a-A, and 1
+    for 1a or 5 for 5a′, or None for a top-level number. A primed number
+    such as 5a′ stands beside 5a, not under it."""
+    for pattern in (r"^(.+)\.\d+$", r"^(.+)-[A-Z]$", r"^(\d+(?:\.\d+)*)[a-z][′″‴]*$"):
+        m = re.match(pattern, ident)
+        if m:
+            return m.group(1)
+    return None
 
 
 FILE_DEFAULT = re.compile(r"cpo-default:\s*([^\s*/>]+)")

@@ -214,6 +214,18 @@ def standing(state, tag, fp, now=None):
     return held or "open"
 
 
+def unit_name(defs, name):
+    """A unit as the agent wrote it, which a shell makes awkward to type
+    with a `§`: `DESIGN1b` or `DESIGN:1b` for `DESIGN§1b`, or `1b` alone
+    when one doc numbers a section so. Anything else is left as it is."""
+    if name in defs or "§" in name or "/" in name:
+        return name
+    plain = name.replace(":", "")
+    match = [t for t in defs if t.replace("§", "") == plain] or \
+        [t for t in defs if t.split("§", 1)[1] == name]
+    return match[0] if len(match) == 1 else name
+
+
 def head(root):
     return subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=root,
                           capture_output=True, text=True).stdout.strip()
@@ -297,9 +309,16 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
     changed = why_stale(root, defs, state, d.tag)["changes"] if before and \
         before["print"] != fp else None
     return {"audit": name, "unit": d.tag, "changed": changed, "name": d.name, "where": f"{d.path}:{d.line}",
-            "text": d.text, "code": code, "pointers": d.pointers, "before": before,
-            "holder": me,
-            "until": now + CLAIM_SECONDS}
+            "text": d.text, "code": code, "before": before, "holder": me,
+            # A file the brief already shows code from needs no pointer to it.
+            "pointers": [p for p in d.pointers if not any(
+                c["where"].split(":", 1)[0] == p for c in code)],
+            "until": now + CLAIM_SECONDS,
+            "until_utc": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(now + CLAIM_SECONDS)),
+            # The brief says what to do next, in JSON as on a terminal.
+            "next": f"Check each claim against the code, then run: cpo audit done {name} "
+                    f"{d.tag} --verified, or --finding \"<what is wrong, and where>\", or "
+                    "--question \"<what a person must decide>\" --for <whom>"}
 
 
 # Implements [CPO§W10]
@@ -577,7 +596,11 @@ def status(root, store, defs, name, only_me=False):
         rows.append({"unit": d.tag, "name": d.name, "standing": st,
                      "lines": lines_of(root, regions),
                      "holder": claim["holder"] if st == "claimed" else None,
-                     "note": out.get("note") if st in ("finding", "question") else None,
+                     # A finding stays visible while it is being fixed, when
+                     # the edits that fix it make the unit stale.
+                     "note": (f"was a {out['status']}: {out['note']}" if st == "stale" else
+                              out.get("note")) if out.get("status") in ("finding", "question")
+                     and out.get("note") else None,
                      "for": out.get("for")})
     counts = {}
     for r in rows:

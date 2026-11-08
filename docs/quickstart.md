@@ -15,7 +15,11 @@ then install it as a tool:
 
 ```sh
 uv tool install git+ssh://<repository>   # pending: where it will live
+uv tool update-shell                     # puts ~/.local/bin, where cpo is, on PATH
 ```
+
+If `cpo` is "command not found" afterwards, open a new shell, or add
+`~/.local/bin` to `PATH` yourself; your agent's shell needs it too.
 
 ## Five minutes, no setup
 

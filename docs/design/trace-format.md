@@ -118,8 +118,10 @@ overrides a default.
   retag them. `.cpo` can declare a doc whose numbered headings are
   definitions, with a prefix, a pattern for its headings, and a pattern for
   its citations elsewhere, such as `DESIGN.md §6c`. Each heading defines
-  its section, its nesting gives the tree, and the size rule measures it as
-  a section [M41]. A repository that has not adopted Concipio keeps that
+  its section, and the size rule measures it as a section [M41]. A
+  section's number gives the tree: `5c.1` and `5c-A` belong under `5c`,
+  `1a` under `1`, and a primed `5a′` beside `5a`. Heading nesting decides
+  only where the number does not. A repository that has not adopted Concipio keeps that
   `.cpo` in the store [T17].
   - **CPO§T69:** A source needs only its doc. Its prefix defaults to the
     doc's name in capitals, its headings to any numbered heading Concipio
@@ -310,8 +312,10 @@ what rules it keeps, through its guards and their comments.
   `docs.json` and `mint.json` are read; other sites' navigation can be
   added the same way.
 - **CPO§T73:** `cpo lint` reports a link from a doc to a file in the
-  repository that does not exist. A link to a line, `src/ring.c:15`,
-  links to its file.
+  repository that does not exist, or to a heading its target lacks. A
+  link to a line, `src/ring.c:15`, links to its file, and a heading's
+  anchor is spelled as GitHub and most doc sites spell it, or named
+  outright with `{#id}` or `<a id="...">`.
 
 ## Views of code
 

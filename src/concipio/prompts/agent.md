@@ -113,14 +113,27 @@ needs a person's time until the design is ready to sign.
    the code works rather than how to use it, declare it in `.cpo`; the
    doc's path is enough, as `[[source]]` then `doc = "DESIGN.md"`, and
    `cpo config` shows what was inferred. Then record today's problems
-   with `cpo lint --write-baseline`, in a commit of its own.
+   with `cpo lint --write-baseline`, in a commit of its own; if lint finds
+   none, there is nothing to record.
 3. If it has none, write one. Start a design doc beside the README and
    link it from there. Give it numbered sections, one per mechanism, each
    a few paragraphs, taking the facts from the code, the user docs, and
    the tests; say what the code does now, in claims a reader could check.
+   A numbered section is a heading that starts with its number, and a
+   section's number places it: `1a` and `1.2` belong under `1`.
+
+   ```markdown
+   ## 1. The event queue
+   ### 1a. Shared-memory layout
+   ```
+
+   Name functions and files in backticks, as `PschEnqueue` or
+   `src/queue/shmem.c`; the audit's brief shows the code a section names.
    Then declare it and record the baseline, as in step 2. Do not cite it
    from code yet.
-4. Audit it: `cpo audit next <date>`, as below. For a design you wrote,
+4. Audit it: `cpo audit next <date>`, as below. A unit's name may be
+   written without its `§`, as `DESIGN1a` or just `1a`, which saves quoting
+   it for the shell. For a design you wrote,
    the audit is a second, independent read, so give each section to a
    fresh helper rather than checking your own draft.
 5. Cite as sections are verified, upgrading references to `Implements`

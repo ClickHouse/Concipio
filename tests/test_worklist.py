@@ -161,3 +161,15 @@ def test_a_reworded_sentence_shows_only_its_changed_words():
         "The ring is sized per slot. It cannot be exhausted. Takers wait.",
         "The ring is sized per slot. It cannot be exhausted by fills. Takers wait.")
     assert out == "~ It cannot be [-exhausted.-] {+exhausted by fills.+}"
+
+
+def test_short_unit_names_and_a_findings_note_while_it_is_fixed(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    assert worklist.unit_name(defs, "D1") == "D§1" and worklist.unit_name(defs, "2") == "D§2"
+    brief = worklist.next_unit(repo, store, defs, "trial")
+    assert "cpo audit done trial D§1" in brief["next"] and brief["until_utc"].endswith("Z")
+    worklist.record(repo, store, defs, "trial", "D§1", "finding", "refuses nothing")
+    (repo / "src/ring.c").write_text("int ring_take(void) {\n  return -1;\n}\n")
+    [row] = [r for r in worklist.status(repo, store, defs, "trial")["rows"] if r["unit"] == "D§1"]
+    assert row["standing"] == "stale" and row["note"] == "was a finding: refuses nothing"

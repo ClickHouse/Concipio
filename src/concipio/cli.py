@@ -495,6 +495,9 @@ def cmd_worklist(args, defs, repo):
     if not args.name:
         raise SystemExit(f"cpo audit {args.action} needs the audit's name")
     store = Store(repo)
+    if args.unit:
+        args.unit = worklist.unit_name(defs, args.unit)
+    args.scope = [worklist.unit_name(defs, s) for s in args.scope]
     if args.action == "next":
         b = worklist.next_unit(repo, store, defs, args.name, args.budget, args.scope)
         if b.get("error") or b.get("done"):
@@ -557,6 +560,10 @@ def cmd_worklist(args, defs, repo):
                 f": {row['note']}" if row["note"] else "") + (
                 f" (for {row['for']})" if row["for"] else "")
             lines.append(f"  {row['standing']:9} {row['unit']} {row['name']}{extra}")
+    quiet = sum(1 for row in r["rows"] if row["standing"] in ("open", "verified"))
+    if quiet:
+        lines.append(f"  ({quiet} open or verified units are not listed; --json lists every "
+                     "unit.)")
     emit(r, "\n".join(lines), args.json)
     return 0
 
@@ -871,6 +878,11 @@ def cmd_status(args, defs, repo):
     except review.ReviewError:
         pass
     data, score, status = score_report(args, defs, repo)
+    cited = data["coverage"]["any"]
+    if cited < 100:
+        # A low score with little cited reads as done; say what it leaves out.
+        score.insert(1, f"  The score counts problems lint can see; {cited:.1f}% of the code "
+                        "cites a design, which it does not count.")
     out = (["In progress:"] + lines + [""] if lines else ["Nothing in progress."]) + score
     emit({"in_progress": flight, **data}, "\n".join(out), args.json)
     return status
@@ -964,8 +976,11 @@ def cmd_lint(args, defs, repo):
     if later:
         lines.append(f"{len(later)} orphans postponed in .cpo")
     if not problems:
+        cites = any(not docs.is_doc(c.path) for d in defs.values() for c in d.citations)
         lines.insert(0, "Every design fits on a screen, reaches the master, and claims "
-                        "no more code than its limit.")
+                        "no more code than its limit." if cites else
+                        "No problems in the docs. Nothing in the code cites the design "
+                        "yet, so lint has checked the docs alone.")
     emit({"problems": [asdict(p) for p in shown], "new": len(fresh),
           "measure": {"baseline": then, "now": now}, "known":
           len(problems) - len(fresh), "postponed_orphans": later, "limits": limits},

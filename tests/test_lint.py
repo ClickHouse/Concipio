@@ -582,3 +582,16 @@ def test_broken_links_agent_files_and_site_pages(tmp_path):
     got = sorted((p["rule"], p["path"]) for p in d["problems"])
     assert got == [("broken-link", "README.md")], \
         "agent files are not docs, and a site's pages are reached through its navigation"
+
+
+def test_sections_nest_by_their_numbers_and_links_name_real_headings(tmp_path):
+    from concipio import docs
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md#1-the-queue), "
+                     "[nothing](DESIGN.md#gone), and [here](#top).\n",
+        "DESIGN.md": "# Design\n\n## 1. The queue\n\nText.\n\n## 1a. Layout\n\nMore.\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\n')
+    _, defs, _ = docs.load(root=tmp_path)
+    assert defs["DESIGN§1a"].parent == "DESIGN§1"
+    _, d = run_lint(tmp_path)
+    assert [p["key"] for p in d["problems"] if p["rule"] == "broken-link"] == ["DESIGN.md#gone"]

@@ -100,7 +100,8 @@ code. It builds on the kinds of design point [Y1, Y12, Y14], the store
 - **CPO§W10:** `cpo plan done` ends a claim with an outcome: done or
   verified, a finding, or a question for a person, recorded against the
   item's fingerprints. A question names whom it is for, the item's owner
-  by default [F1].
+  by default [F1]. A finding's text stays in the plan's status after the
+  edits that fix it make the item stale, since that is when it is read.
 - **CPO§W32:** `cpo plan note <item> "<text>"` appends a dated line to
   the item's log, which is simply its children: bullets under it, or a
   child doc it links to. When the bullets would push a section past its

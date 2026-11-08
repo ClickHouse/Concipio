@@ -544,3 +544,27 @@ def test_claims_of_impossibility_need_evidence(tmp_path):
     _, d = run_lint(tmp_path)
     assert sorted(p["key"] for p in d["problems"] if p["rule"] == "unbacked-claim") == [
         "pick: assert(0)", "take: cannot be exhausted"]
+
+
+def test_a_source_needs_only_its_doc(tmp_path):
+    from concipio import docs
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md).\n",
+        "DESIGN.md": "# Design\n\n## 5. Drain\n\n### 5a′.1 Pressure\n\nText.\n",
+        "a.c": "/* As DESIGN §5a′.1 says, and DESIGN.md §5 too. */\nint a;\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\n')
+    _, defs, _ = docs.load(root=tmp_path)
+    assert {"DESIGN§5", "DESIGN§5a′.1"} <= set(defs)
+    assert [c.path for c in defs["DESIGN§5a′.1"].citations] == ["a.c"]
+    assert [c.path for c in defs["DESIGN§5"].citations] == ["a.c"], "the doc's name cites it too"
+
+
+def test_config_shows_each_default_as_one(tmp_path):
+    import json, os, subprocess, sys
+    lint_repo(tmp_path, {"README.md": "# Top\n"}, cpo='[lint]\nsection_limit = 80\n')
+    out = subprocess.run([sys.executable, "-m", "concipio.cli", "config", "--json"],
+                         cwd=tmp_path, capture_output=True, text=True,
+                         env=dict(os.environ, XDG_DATA_HOME=str(tmp_path / "data")))
+    d = json.loads(out.stdout)
+    assert d["lint.section_limit"] == {"value": 80, "default": False}
+    assert d["lint.statement_limit"] == {"value": 20, "default": True}

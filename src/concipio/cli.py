@@ -183,6 +183,7 @@ def build_parser():
     un.add_argument("paths", nargs="*", help="limit to these files or directories")
     un.add_argument("--all", action="store_true",
                     help="any guard with an explaining comment, not only those naming an incident")
+    add("config", "show the settings in effect, with each default marked")
     pa = add("path", "show the chain of links from the master to a doc or tag")
     pa.add_argument("target", help="a doc's path, a tag, or an ID")
     tree = add("tree", "show how statements refine one another")
@@ -329,6 +330,8 @@ def dispatch(args):
         status = cmd_unreachable(args, defs, repo)
     elif args.command == "unwritten":
         status = cmd_unwritten(args, defs, repo)
+    elif args.command == "config":
+        status = cmd_config(args, defs, repo)
     elif args.command == "status":
         status = cmd_status(args, defs, repo)
     elif args.command == "audit" and args.action:
@@ -776,6 +779,64 @@ def cmd_audit(args, defs, repo):
           "flight; this form will go away.", file=sys.stderr)
     emit(data, "\n".join(lines), args.json)
     return status
+
+
+# Implements [CPO§T70]
+def cmd_config(args, defs, repo):
+    """The settings Concipio uses here, `.cpo`'s and its defaults, each
+    default marked, so a person sees what was inferred without a file of
+    defaults that would go stale as they improve."""
+    cfg = docs.config(repo)
+    path = docs.config_path(repo)
+    lines = [f"# Settings for {repo.name}, from {path or 'no .cpo: every value is a default'}.",
+             "# Lines marked (default) are not in .cpo; add one there to change it.", ""]
+    data = {}
+
+    def show(key, value, given):
+        data[key] = {"value": value, "default": not given}
+        rendered = json.dumps(value, ensure_ascii=False)
+        lines.append(f"{key} = {rendered}" + ("" if given else "   # (default)"))
+    show("master", cfg.get("master", "README.md"), "master" in cfg)
+    table = cfg.get("lint", {})
+    for key, default in (("statement_limit", lint_mod.STATEMENT_LIMIT),
+                         ("section_limit", lint_mod.SECTION_LIMIT),
+                         ("breadth_limit", lint_mod.BREADTH_LIMIT)):
+        show(f"lint.{key}", table.get(key, default), key in table)
+    show("lint.postponed", table.get("postponed", []), "postponed" in table)
+    for key in ("archive", "exclude"):
+        show(key, cfg.get(key, []), key in cfg)
+    show("retired", cfg.get("retired", {}), "retired" in cfg)
+    show("unwritten.incident", cfg.get("unwritten", {}).get("incident", []),
+         "incident" in cfg.get("unwritten", {}))
+    unreach = cfg.get("unreachable", {})
+    show("unreachable.lint", unreach.get("lint", False), "lint" in unreach)
+    fields = cfg.get("fields", {})
+    for key, default in lint_mod.FIELD_DEFAULTS.items():
+        show(f"fields.{key}", fields.get(key, default), key in fields)
+    given = cfg.get("source", [])
+    if given:
+        lines += ["", "# Docs whose numbered headings define sections:"]
+    data["sources"] = []
+    for raw, src in zip(given, docs.sources(repo)):
+        lines.append("[[source]]")
+        entry = {}
+        # A default pattern is shown by what it matches, not as a regex.
+        said = {"heading": "any numbered heading, as `## 5.`, `### 5d.1`, `#### §5a′`",
+                "cite": f"`{src['prefix']} §5c`, or the doc's name then a section number"}
+        for key in ("doc", "prefix", "heading", "cite"):
+            value = src[key].pattern if hasattr(src[key], "pattern") else src[key]
+            entry[key] = {"value": value, "default": key not in raw}
+            if key in raw or key not in said:
+                lines.append(f"{key} = {json.dumps(value, ensure_ascii=False)}"
+                             + ("" if key in raw else "   # (default)"))
+            else:
+                lines.append(f"# {key}: {said[key]}   (default)")
+        entry["bare_in_code"] = bool(raw.get("bare_in_code"))
+        if raw.get("bare_in_code"):
+            lines.append("bare_in_code = true")
+        data["sources"].append(entry)
+    emit(data, "\n".join(lines), args.json)
+    return 0
 
 
 # Implements [CPO§W37]

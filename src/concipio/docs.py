@@ -310,9 +310,9 @@ def find_citations(root, files, defs):
 
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-# A section number as people write them: 5, 5.2, 5a, 5d.1, 5a‴, 4a-A, after
-# an optional § in the heading itself.
-SECTION_ID = r"\d+(?:\.\d+)*(?:[a-z](?:\.\d+)*)?[′″‴]*(?:-[A-Z])?"
+# A section number as people write them: 5, 5.2, 5a, 5d.1, 5a‴, 5a′.1, 4a-A,
+# after an optional § in the heading itself.
+SECTION_ID = r"\d+(?:\.\d+)*(?:[a-z][′″‴]*(?:\.\d+)*)?[′″‴]*(?:-[A-Z])?"
 # A heading that starts with something like a section number, which a
 # source's own pattern may still fail to read [T60].
 LOOKS_NUMBERED = re.compile(r"^(#{2,6})\s+§?(\d+[\w.′″‴-]*?)\.?\s")
@@ -358,12 +358,28 @@ def sources(root):
     citations elsewhere."""
     out = []
     for src in config(root).get("source", []):
-        out.append({"doc": src["doc"], "prefix": src["prefix"],
-                    "heading": re.compile(src["heading"]),
-                    "cite": re.compile(src["cite"]),
+        d = source_defaults(src["doc"])
+        out.append({"doc": src["doc"], "prefix": src.get("prefix", d["prefix"]),
+                    "heading": re.compile(src.get("heading", d["heading"])),
+                    "cite": re.compile(src.get("cite", source_defaults(
+                        src["doc"], src.get("prefix", d["prefix"]))["cite"])),
                     # Whether a bare §5c in a code comment means this doc's.
                     "code_default": bool(src.get("bare_in_code"))})
     return out
+
+
+# Implements [CPO§T69]
+def source_defaults(doc, prefix=None):
+    """What a source in `.cpo` need not say: its prefix, the doc's name in
+    capitals; its headings, any numbered heading Concipio recognises, as
+    `## 5.`, `### 5d.1`, or `#### §5a′`; and its citations, the prefix or
+    the doc's name, then a section sign and a number."""
+    stem = Path(doc).stem
+    prefix = prefix or re.sub(r"\W", "_", stem).upper()
+    names = "|".join(sorted({re.escape(prefix), re.escape(stem)}))
+    return {"prefix": prefix,
+            "heading": rf"^#{{2,6}}\s+§?(?P<id>{SECTION_ID})\.?\s",
+            "cite": rf"(?:{names})(?:\.(?:md|mdx|markdown))?\s*§\s*(?P<id>{SECTION_ID})"}
 
 
 def heading_definitions(root, src, defs, errors, pattern=None):

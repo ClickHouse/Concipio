@@ -121,6 +121,14 @@ overrides a default.
   its section, its nesting gives the tree, and the size rule measures it as
   a section [M41]. A repository that has not adopted Concipio keeps that
   `.cpo` in the store [T17].
+  - **CPO§T69:** A source needs only its doc. Its prefix defaults to the
+    doc's name in capitals, its headings to any numbered heading Concipio
+    recognises, and its citations to the prefix or the doc's name followed
+    by a section sign and a number. A project gives patterns only for
+    numbering of its own.
+  - **CPO§T70:** `cpo config` shows every setting in effect, each default
+    marked as one, so a person sees what Concipio inferred. No file of
+    defaults is written, which would go stale as the defaults improve.
   - **CPO§T60:** A heading in a declared doc that looks numbered but
     that its heading pattern does not read is reported. It defines no
     section, so citations of it dangle in silence, which is worse than an

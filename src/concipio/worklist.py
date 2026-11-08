@@ -272,6 +272,11 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
             pick = next((u for u in order
                          if standing(state, u[0].tag, u[2], now) in ("stale", "open")), None)
         if pick is None:
+            if not found:
+                return {"done": True, "message": (
+                    "This repository has no design units for an audit to check: no doc "
+                    ".cpo declares as a source, and no tagged statements. Declare a "
+                    "design doc in .cpo, or write one first; `cpo help agent` says how.")}
             return {"done": True, "message": f"Nothing in {name} needs checking."}
         d, regions, fp = pick
         state["claims"][d.tag] = {"holder": me, "contact": contact(), "at": now,

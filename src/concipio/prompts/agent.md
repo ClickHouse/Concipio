@@ -87,6 +87,32 @@ review's cornerstone a child of that branch's design.
 
 ## Adopting Concipio in a repository
 
+Adopt in small steps; every step leaves the repository better, and none
+needs a person's time until the design is ready to sign.
+
+1. See where the repository stands. These need no setup: `cpo status`,
+   `cpo coverage`, `cpo helpers --counts`, `cpo unreachable`, and
+   `cpo unwritten`. Fix any broken links `cpo lint` reports first; they
+   are cheap and certain.
+2. Find the design. If the repository has a design doc, one that says how
+   the code works rather than how to use it, declare it in `.cpo`; the
+   doc's path is enough, as `[[source]]` then `doc = "DESIGN.md"`, and
+   `cpo config` shows what was inferred. Then record today's problems
+   with `cpo lint --write-baseline`, in a commit of its own.
+3. If it has none, write one. Start a design doc beside the README and
+   link it from there. Give it numbered sections, one per mechanism, each
+   a few paragraphs, taking the facts from the code, the user docs, and
+   the tests; say what the code does now, in claims a reader could check.
+   Then declare it and record the baseline, as in step 2. Do not cite it
+   from code yet.
+4. Audit it: `cpo audit next <date>`, as below. For a design you wrote,
+   the audit is a second, independent read, so give each section to a
+   fresh helper rather than checking your own draft.
+5. Cite as sections are verified, upgrading references to `Implements`
+   where the code truly implements the section.
+6. Ask a person to sign the outline of what is verified: whether the
+   sections are the right ones, in the right places, not every line.
+
 Concipio holds docs to three standards: completeness (every line of code
 traces to a design, every doc is reachable), correctness (the docs say what
 the code does and agree with one another), and consumability (every design
@@ -115,8 +141,8 @@ fits on a screen, and what matters most stays near the top). The commands:
 
 The conventions:
 
-- `.cpo` declares the docs whose numbered headings define citable sections,
-  with their prefix and citation pattern. Within a doc, a bare `§5c` means
+- `.cpo` declares the docs whose numbered headings define citable sections;
+  the doc's path is enough, and its prefix and patterns default. Within a doc, a bare `§5c` means
   that doc's section; in code, it means the source marked `bare_in_code`, or
   the one a file names with a `cpo-default: PREFIX` comment.
 - A citation of the form `Implements §5c` or `Tests §5c` covers the

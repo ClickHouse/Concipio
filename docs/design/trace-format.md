@@ -135,7 +135,7 @@ overrides a default.
     error.
 - **CPO§T41:** A bare section number, `§5c`, means section 5c of the doc it
   is written in, or of the doc linked just before it, as in
-  "[the answers](answers.md), §5". Concipio finds any doc's numbered
+  `[the answers](answers.md), §5`. Concipio finds any doc's numbered
   headings without configuration, so editors can follow such references
   in every doc. In a doc that defines tags by its numbered headings
   [T39], a resolved bare number is also a citation of the tag; elsewhere
@@ -294,9 +294,24 @@ what rules it keeps, through its guards and their comments.
   - **CPO§T68:** What a query does not mark stays Concipio's own: C's
     macros and typedefs, Ruby's blocks such as RSpec's, and which
     declaration a comment documents [T8].
+
+## What counts as a doc
+
 - **CPO§T67:** Concipio reads Markdown in its common spellings, `.md`,
   `.mdx`, and `.markdown`, so the docs of a site such as Mintlify count
   as docs.
+- **CPO§T71:** Instructions for agents, such as `CLAUDE.md`, `AGENTS.md`,
+  and the skills under `.claude/`, are neither design nor code, so they
+  are not docs a design must reach. `.cpo` may name its own list as
+  `agent_files`.
+- **CPO§T72:** A documentation site's pages are reached through its
+  navigation, not through links between them, so the pages a site's
+  navigation lists are reachable as the master is [M24]. Mintlify's
+  `docs.json` and `mint.json` are read; other sites' navigation can be
+  added the same way.
+- **CPO§T73:** `cpo lint` reports a link from a doc to a file in the
+  repository that does not exist. A link to a line, `src/ring.c:15`,
+  links to its file.
 
 ## Views of code
 

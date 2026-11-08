@@ -4,7 +4,7 @@ Josh's inline comments on the first draft of [the store design](../design/store.
 
 # The store
 
-Parent: [Review mode](review-mode.md)
+Parent: [Review mode](../design/review-mode.md)
 
 **Status: design, not built.** This replaces the store layout that review
 mode uses today [V12, V22], and the carry-over between heads [V11].

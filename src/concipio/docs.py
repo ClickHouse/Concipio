@@ -69,15 +69,58 @@ def is_doc(path):
     return str(path).endswith(DOC_EXTENSIONS)
 
 
+# Instructions for agents, which are neither design nor code [CPO§T71].
+AGENT_FILES = ["CLAUDE.md", "*/CLAUDE.md", "AGENTS.md", "*/AGENTS.md", "GEMINI.md",
+               ".claude/*", ".cursor/*", ".github/*"]
+
+
 def tracked_files(root):
     """The files git tracks or would, as they stand on disk: a tracked file
-    deleted but not yet committed is gone, and a submodule is not a file."""
+    deleted but not yet committed is gone, and a submodule is not a file.
+    Instructions for agents are left out, unless `.cpo` names its own."""
+    import fnmatch
     out = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=root, capture_output=True, text=True, check=True,
     )
+    skip = config(root).get("agent_files", AGENT_FILES)
     return [p for p in out.stdout.split("\0") if p and p.rsplit("/", 1)[-1] not in OWN_FILES
-            and (Path(root) / p).is_file()]
+            and (Path(root) / p).is_file() and not any(fnmatch.fnmatch(p, g) for g in skip)]
+
+
+# Implements [CPO§T72]
+def site_pages(root, files):
+    """The pages a documentation site's navigation lists, which readers
+    reach through the site rather than through links: Mintlify's
+    `docs.json` and `mint.json`, whose pages are named without their
+    extensions, relative to the file."""
+    import json
+    out = set()
+    docs_in = {f for f in files if is_doc(f)}
+    for f in files:
+        if Path(f).name not in ("docs.json", "mint.json"):
+            continue
+        try:
+            nav = json.loads((Path(root) / f).read_text()).get("navigation")
+        except (ValueError, OSError, AttributeError):
+            continue
+        base = str(Path(f).parent)
+
+        def walk(x):
+            if isinstance(x, str):
+                for ext in DOC_EXTENSIONS:
+                    page = str(Path(base) / (x.lstrip("/") + ext)) if base != "." else \
+                        x.lstrip("/") + ext
+                    if page in docs_in:
+                        out.add(page)
+            elif isinstance(x, list):
+                for y in x:
+                    walk(y)
+            elif isinstance(x, dict):
+                for y in x.values():
+                    walk(y)
+        walk(nav)
+    return out
 
 
 # Implements [CPO§T20]

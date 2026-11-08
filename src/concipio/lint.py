@@ -76,6 +76,37 @@ def lint(root, files, defs, statement_limit=STATEMENT_LIMIT, section_limit=SECTI
     return sorted(problems, key=lambda p: (p.path, p.line))
 
 
+# Implements [CPO§T73]
+def broken_links(root, files):
+    """Links from a doc to a file in the repository that does not exist,
+    which a reader follows into nothing."""
+    present = set(files) | {posixpath.dirname(f) for f in files}
+    every = {f for f in files}
+    out = []
+    for f in files:
+        if not docs.is_doc(f):
+            continue
+        text = (root / f).read_text(errors="replace")
+        for n, line in docs.prose_lines(text):
+            for m in LINK.finditer(line):
+                raw = (m.group(1) or m.group(2) or "").split("#", 1)[0]
+                if not raw or re.match(r"^[a-z][\w+.-]*:", raw) or raw.startswith("/"):
+                    continue
+                # A citation such as `[Y12]: ...` at the start of a line reads
+                # like a link definition; only a path-like target is a link.
+                if m.group(2) and not re.search(r"[./]", raw):
+                    continue
+                # A link to a line, `src/ring.c:15`, links to the file.
+                raw = re.sub(r":\d+(-\d+)?$", "", raw)
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(f), raw))
+                if target in present or (root / target).exists() or \
+                        any(e.startswith(target.rstrip("/") + "/") for e in every):
+                    continue
+                out.append(Problem(f, n, "broken-link",
+                                   f"links to {raw}, which does not exist", raw, 1))
+    return out
+
+
 def links_of(path, text):
     """The Markdown files a doc links to, resolved against its directory.
     A link to a directory reaches the docs directly inside it."""
@@ -161,7 +192,11 @@ def orphans(root, files, defs, master="README.md", postponed=()):
     links between docs and citations of tags, in either direction. Return
     (orphans, postponed orphans)."""
     md, edges = doc_graph(root, files, defs)
+    # A documentation site's pages are reached through its navigation, so
+    # each is a root beside the master [T72].
     seen = set(paths_from(master, edges))
+    for page in docs.site_pages(root, files):
+        seen |= set(paths_from(page, edges))
     lost = sorted(f for f in md if f not in seen)
     later = [f for f in lost if any(fnmatch.fnmatch(f, p) for p in postponed)]
     return [f for f in lost if f not in later], later
@@ -226,6 +261,7 @@ def check(root, files, defs, limits, cfg=None):
     problems += history_in_headings(root, files, defs, (cfg or {}).get("lint", {}).get("history_words"))
     problems += quoted_headings(root, defs)
     problems += unread_headings(root, files)
+    problems += broken_links(root, files)
     from . import claims
     problems += claims.lint_problems(root, files, defs, cfg or {})
     problems += retired_terms(root, files, (cfg or {}).get("retired", {}))
@@ -566,7 +602,8 @@ STANDARDS = {
     "correctness": ("dangling-section", "stale-updated", "schema", "undeclared-field",
                     "field-syntax", "unverified-critical", "stale-critical",
                     "history-in-heading", "retired-term",
-                    "retired-term-live", "unread-heading", "unbacked-claim"),
+                    "retired-term-live", "unread-heading", "unbacked-claim",
+                    "broken-link"),
     "consumability": ("section-length", "statement-length", "breadth", "buried",
                       "heading-in-blockquote"),
 }

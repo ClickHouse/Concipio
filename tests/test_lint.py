@@ -513,8 +513,7 @@ def test_a_section_number_after_another_docs_name_is_that_docs(tmp_path):
 
 def test_a_tracked_file_deleted_from_disk_is_not_read(tmp_path):
     import subprocess
-    lint_repo(tmp_path, {"README.md": "# Top\n\nSee [notes](notes.md).\n",
-                         "notes.md": "# Notes\n"})
+    lint_repo(tmp_path, {"README.md": "# Top\n", "notes.md": "# Notes\n"})
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     (tmp_path / "notes.md").unlink()
     status, d = run_lint(tmp_path)
@@ -568,3 +567,18 @@ def test_config_shows_each_default_as_one(tmp_path):
     d = json.loads(out.stdout)
     assert d["lint.section_limit"] == {"value": 80, "default": False}
     assert d["lint.statement_limit"] == {"value": 20, "default": True}
+
+
+def test_broken_links_agent_files_and_site_pages(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the guide](docs/guide.md) and [setup](INSTALL.md).\n",
+        "CLAUDE.md": "# For agents\n",
+        ".claude/skills/x/SKILL.md": "# A skill\n",
+        "docs/docs.json": '{"navigation": {"pages": ["get-started/intro"]}}',
+        "docs/get-started/intro.mdx": "# Intro\n",
+        "INSTALL.md": "# Install\n",
+    })
+    _, d = run_lint(tmp_path)
+    got = sorted((p["rule"], p["path"]) for p in d["problems"])
+    assert got == [("broken-link", "README.md")], \
+        "agent files are not docs, and a site's pages are reached through its navigation"

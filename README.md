@@ -5,6 +5,9 @@ instruction-set spec it implements. Software lost that rigor as languages rose
 and systems grew. Concipio aims to bring it back, starting where the loss hurts
 most: code review.
 
+New here? Start with the [quickstart](docs/quickstart.md). The rest of this
+document is Concipio's master design.
+
 **CPO§M29:** A person should understand at least the high-level concepts of the
 code they change. Agents make it easy never to learn them: an engineer can
 work in an unfamiliar language and an unfamiliar system, and merge code nobody

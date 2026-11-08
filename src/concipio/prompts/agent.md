@@ -1,11 +1,26 @@
 <!-- Implements [CPO§V25] -->
-<!-- Draft. This is the text `cpo help agent` will print. -->
+<!-- This is the text `cpo help agent` prints. -->
 
-# Reviewing a change with Concipio
+# Working with Concipio
+
+Concipio (`cpo`) traces code to its design and holds the state of the work
+on both: it records your judgments and checks them, and makes none itself.
+Every command prints JSON unless given `--human`. Read the part you need:
+
+- **Reviewing a change**, so a person can understand it: the numbered
+  sections below.
+- **Adopting Concipio in a repository**, with or without a design doc to
+  start from: its section, after the review.
+- **Working an audit**, checking a design against its code: its section.
+- **Asking why** some code exists: the last section.
+
+Run `cpo status` first: it lists any audit or review already in progress.
+
+# Reviewing a change
 
 You are reviewing a change so that a human can understand it. Concipio
-(`cpo`) holds the review's state and checks your work; it makes no judgments.
-You make them, and `cpo` records them. Every command prints JSON.
+holds the review's state and checks your work; you make the judgments, and
+`cpo` records them.
 
 You are expected to be a large model. Delegate span-by-span work to
 sub-agents on a small, inexpensive model; do the judgment-heavy steps

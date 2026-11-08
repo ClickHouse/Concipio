@@ -284,7 +284,7 @@ def build_parser():
     sub.add_parser("lsp", help="run a language server on stdio for editors")
     add("migrate", "convert a store that filed decisions by review into records")
     hp = sub.add_parser("help", help="print guidance").add_subparsers(dest="sub", required=True)
-    hp.add_parser("agent", help="print the protocol for an agent running a review")
+    hp.add_parser("agent", help="print the guide for an agent: reviews, adoption, audits")
     return parser
 
 
@@ -306,7 +306,9 @@ def dispatch(args):
         lsp.main()
         return 0
     if args.command == "help":
-        print(resources.files("concipio").joinpath("prompts/agent.md").read_text())
+        text = resources.files("concipio").joinpath("prompts/agent.md").read_text()
+        # The guide's HTML comments are for its maintainers, not for agents.
+        print(re.sub(r"<!--.*?-->\n?", "", text, flags=re.S).lstrip("\n"), end="")
         return 0
     repo = docs.repo_root()
     key = (args.command, getattr(args, "sub", None))

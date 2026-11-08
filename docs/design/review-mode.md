@@ -102,6 +102,9 @@ runs the same on a repository that will never adopt Concipio.
     definition outside a function, each `typedef`, and each `#define`.
   - **Python and Perl:** each function, method, and subroutine; classes
     and packages give scope.
+  - **Go and Rust:** each function and method, a Go method named for its
+    receiver as `Ring.Take`; each Go type and Rust struct, enum, or union.
+    Rust's `impl` blocks, traits, and modules give scope.
 
   The list grows as reviews find constructs it handles badly, and each review
   records the version it used.

@@ -41,3 +41,19 @@ def test_mdx_docs_define_statements(tmp_path):
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     _, defs, _ = docs.load(root=tmp_path)
     assert "G§1" in defs
+
+
+def test_go_methods_carry_their_receiver_and_types_are_records():
+    text = ("package ring\n\ntype Ring struct {\n\tn int\n}\n\n"
+            "func (r *Ring) Take() int { return r.n }\n\nfunc New() *Ring { return &Ring{} }\n")
+    assert names("go", text) == [("type", "type Ring"), ("method", "Ring.Take"),
+                                 ("function", "New")]
+
+
+def test_rust_impls_are_scopes_named_by_type_and_trait():
+    text = ("struct Ring { n: usize }\n\ntrait Take { fn take(&mut self) -> usize; }\n\n"
+            "impl Take for Ring {\n    fn take(&mut self) -> usize { self.n }\n}\n\n"
+            "impl Ring {\n    fn new() -> Self { Ring { n: 0 } }\n}\n")
+    assert names("rust", text) == [("struct", "struct Ring"), ("trait scope", "Take"),
+                                   ("impl scope", "Take for Ring"), ("function", "take"),
+                                   ("impl scope", "Ring"), ("function", "new")]

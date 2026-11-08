@@ -292,7 +292,10 @@ what rules it keeps, through its guards and their comments.
   A function, or a method where the grammar says so, is a declaration; a
   class that holds functions, or a language's class or module, is a
   scope; a C-family record holding only data is a declaration named by
-  its keyword. A record defined inside a function is part of it.
+  its keyword. A record defined inside a function is part of it. The
+  record types are C's and C++'s `*_specifier`s, Rust's structs, enums,
+  and unions, and Go's type declarations, listed in Concipio rather than
+  guessed, since a class without methods may still be a scope.
   - **CPO§T68:** What a query does not mark stays Concipio's own: C's
     macros and typedefs, Ruby's blocks such as RSpec's, and which
     declaration a comment documents [T8].

@@ -11,9 +11,11 @@ from pathlib import Path
 import tree_sitter_bash
 import tree_sitter_c
 import tree_sitter_cpp
+import tree_sitter_go
 import tree_sitter_perl
 import tree_sitter_python
 import tree_sitter_ruby
+import tree_sitter_rust
 from tree_sitter import Language, Parser, Query, QueryCursor
 
 with warnings.catch_warnings():
@@ -24,7 +26,9 @@ with warnings.catch_warnings():
         "bash": Language(tree_sitter_bash.language()),
         "c": Language(tree_sitter_c.language()),
         "cpp": Language(tree_sitter_cpp.language()),
+        "go": Language(tree_sitter_go.language()),
         "perl": Language(tree_sitter_perl.language()),
+        "rust": Language(tree_sitter_rust.language()),
         "python": Language(tree_sitter_python.language()),
     }
 QUERIES = Path(__file__).parent / "queries"
@@ -70,6 +74,10 @@ def language_of(path, text):
         return "cpp"
     if path.endswith((".pl", ".pm", ".t")):
         return "perl"
+    if path.endswith(".go"):
+        return "go"
+    if path.endswith(".rs"):
+        return "rust"
     if path.endswith(".py"):
         return "python"
     if path.endswith((".sh", ".bash")):
@@ -137,8 +145,8 @@ def marks(lang, root):
     out = {}
     for k, node in fns.items():
         inner = next((c for c in node.named_children if key(c) in fns), None)
-        if node.type == "declaration":
-            continue  # a prototype declares a function; it is not one
+        if node.type in SIGNATURES:
+            continue  # a prototype or signature declares a function; it is not one
         if node.parent is not None and key(node.parent) in fns:
             continue  # the decorated definition around it stands for it
         target = inner or node
@@ -146,22 +154,41 @@ def marks(lang, root):
         if name:
             out[k] = ("method" if "method" in target.type else "function", name)
     for node in caps.get("class.outer", []):
-        if node.type.endswith("_specifier") and within(node, ("field_declaration",
-                                                               "function_definition")):
+        record = node.type.endswith("_specifier") or node.type in RECORDS
+        if record and within(node, ("field_declaration", "function_definition",
+                                    "function_item", "function_declaration",
+                                    "method_declaration")):
             continue  # a record in another's fields, or in a function, is part of it
         word = node.type.split("_")[0]
         holds = any(node.start_byte <= f.start_byte and f.end_byte <= node.end_byte
                     for f in fns.values() if f is not node)
         name = declared_name(node)
-        if node.type.endswith("_specifier") and not holds:
+        if record and not holds:
             out[key(node)] = (word, f"{word} {name or '(anonymous)'}")
         elif name:
             out[key(node)] = (f"{word} scope", name)
     return out
 
 
+# Record types that hold only data, named by their keyword: C's and C++'s are
+# `*_specifier`; these are the other languages'.
+RECORDS = {"struct_item", "enum_item", "union_item",   # Rust
+           "type_declaration"}                          # Go, whose name is inside
+# Declarations of a function that has no body here.
+SIGNATURES = {"declaration", "function_signature_item"}
+
+
 def key(node):
     return node.start_byte, node.end_byte, node.type
+
+
+def walk_nodes(node):
+    """A node and everything below it."""
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        yield n
+        stack.extend(reversed(n.children))
 
 
 def within(node, types):
@@ -179,9 +206,25 @@ def declared_name(node):
     declarator."""
     name = node.child_by_field_name("name")
     if name is not None:
-        return node_text(name)
+        # A Go method is known by its receiver's type, as `Ring.Take`, since
+        # many types have a `String` or a `Close`.
+        receiver = node.child_by_field_name("receiver") if node.type == "method_declaration" \
+            else None
+        owner = receiver and next((n for n in walk_nodes(receiver)
+                                   if n.type == "type_identifier"), None)
+        return f"{node_text(owner)}.{node_text(name)}" if owner else node_text(name)
     d = node.child_by_field_name("declarator")
-    return declarator_name(d) if d is not None else None
+    if d is not None:
+        return declarator_name(d)
+    # Rust names an `impl` by its type; Go names a type inside its spec.
+    t = node.child_by_field_name("type")
+    if node.type == "impl_item" and t is not None:
+        trait = node.child_by_field_name("trait")
+        return f"{node_text(trait)} for {node_text(t)}" if trait is not None else node_text(t)
+    spec = next((c for c in node.named_children if c.type == "type_spec"), None)
+    if spec is not None and spec.child_by_field_name("name") is not None:
+        return node_text(spec.child_by_field_name("name"))
+    return None
 
 
 # Implements [CPO§T68]

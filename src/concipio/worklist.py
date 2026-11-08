@@ -14,7 +14,7 @@ from . import docs, lint, records, spans
 CLAIM_SECONDS = 2 * 3600
 # Which rules decide what a unit claims; a record made under older ones is
 # fingerprinted again, at its own commit, before it is compared.
-RULES = 2
+RULES = 3
 # What a harness sets for the commands it runs, by the name of its process.
 HARNESS_IDS = [("claude", "CLAUDE_CODE_SESSION_ID"), ("codex", "CODEX_THREAD_ID"),
                ("pi", "PI_SESSION_ID")]

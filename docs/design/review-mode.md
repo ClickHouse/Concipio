@@ -88,8 +88,9 @@ runs the same on a repository that will never adopt Concipio.
   opening lines of classes and `describe` blocks, join a neighboring span.
   Files with no parser, such as YAML, use the hunk. Deleted code forms spans
   on the base side, scoped by the declarations it was deleted from [M32].
-- **CPO§V9:** Concipio uses tree-sitter for every language, so the rules read
-  the same across them. These count as named declarations at first:
+- **CPO§V9:** Concipio uses tree-sitter for every language, and finds
+  declarations through each language's text-object query [T66], so the
+  rules read the same across them. These count as named declarations:
   - **Ruby:** `def`, including `label def` in Ubicloud progs; a block passed
     to a class-level call, such as a Sequel association with a block; and
     `Sequel.migration` bodies. A run of adjacent class-level calls without
@@ -97,8 +98,10 @@ runs the same on a repository that will never adopt Concipio.
   - **RSpec:** each `it`, and each `before`, `after`, `let`, or `subject`
     block. `describe` and `context` give scope but are never spans.
   - **Shell:** each function; otherwise the hunk.
-  - **C:** each function, each struct, union, or enum definition, each
-    `typedef`, and each `#define`. C++ waits for its grammar.
+  - **C and C++:** each function, each class, struct, union, or enum
+    definition outside a function, each `typedef`, and each `#define`.
+  - **Python and Perl:** each function, method, and subroutine; classes
+    and packages give scope.
 
   The list grows as reviews find constructs it handles badly, and each review
   records the version it used.

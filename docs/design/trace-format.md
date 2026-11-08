@@ -272,6 +272,21 @@ what rules it keeps, through its guards and their comments.
     claim is a lint problem, so a project can baseline today's claims
     and require every new one to come with its evidence [T40].
 
+## Languages
+
+- **CPO§T66:** Concipio finds declarations through each language's
+  text-object query, which maps its syntax onto one vocabulary of
+  functions, classes, comments, and calls, as editors such as Neovim use
+  them. The queries are vendored from nvim-treesitter-textobjects, so a
+  language with a grammar and a query needs no code of Concipio's own.
+  A function, or a method where the grammar says so, is a declaration; a
+  class that holds functions, or a language's class or module, is a
+  scope; a C-family record holding only data is a declaration named by
+  its keyword. A record defined inside a function is part of it.
+  - **CPO§T68:** What a query does not mark stays Concipio's own: C's
+    macros and typedefs, Ruby's blocks such as RSpec's, and which
+    declaration a comment documents [T8].
+
 ## Views of code
 
 - **CPO§T25:** Design docs do not store links to the code that implements

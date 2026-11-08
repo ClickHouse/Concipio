@@ -5,18 +5,30 @@ import re
 import subprocess
 from dataclasses import dataclass
 
+import warnings
+from pathlib import Path
+
 import tree_sitter_bash
 import tree_sitter_c
+import tree_sitter_cpp
+import tree_sitter_perl
 import tree_sitter_python
 import tree_sitter_ruby
-from tree_sitter import Language, Parser
+from tree_sitter import Language, Parser, Query, QueryCursor
 
-LANGUAGES = {
-    "ruby": Language(tree_sitter_ruby.language()),
-    "bash": Language(tree_sitter_bash.language()),
-    "c": Language(tree_sitter_c.language()),
-    "python": Language(tree_sitter_python.language()),
-}
+with warnings.catch_warnings():
+    # The Perl grammar still hands its language over as a bare pointer.
+    warnings.simplefilter("ignore", DeprecationWarning)
+    LANGUAGES = {
+        "ruby": Language(tree_sitter_ruby.language()),
+        "bash": Language(tree_sitter_bash.language()),
+        "c": Language(tree_sitter_c.language()),
+        "cpp": Language(tree_sitter_cpp.language()),
+        "perl": Language(tree_sitter_perl.language()),
+        "python": Language(tree_sitter_python.language()),
+    }
+QUERIES = Path(__file__).parent / "queries"
+INHERITS = re.compile(r"^; inherits: ([\w,]+)")
 RSPEC_SPANS = {"it", "specify", "example", "before", "after", "around",
                "let", "let!", "subject"}
 RSPEC_SCOPES = {"describe", "context", "shared_examples", "shared_context",
@@ -54,6 +66,10 @@ def language_of(path, text):
         return "ruby"
     if path.endswith((".c", ".h")):
         return "c"
+    if path.endswith((".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx")):
+        return "cpp"
+    if path.endswith((".pl", ".pm", ".t")):
+        return "perl"
     if path.endswith(".py"):
         return "python"
     if path.endswith((".sh", ".bash")):
@@ -64,6 +80,8 @@ def language_of(path, text):
             return "ruby"
         if "python" in first:
             return "python"
+        if "perl" in first:
+            return "perl"
         if re.search(r"\b(ba)?sh\b", first):
             return "bash"
     return None
@@ -71,9 +89,10 @@ def language_of(path, text):
 
 def is_test(path):
     name = path.rsplit("/", 1)[-1]
-    return (path.startswith(("spec/", "test/", "tests/")) or "/spec/" in path
-            or "/test/" in path or "/tests/" in path
-            or path.endswith(("_spec.rb", "_test.rb", "_test.py", "_test.c"))
+    # `t/` and `.t` are Perl's convention, which PostgreSQL's TAP tests follow.
+    return (path.startswith(("spec/", "test/", "tests/", "t/")) or "/spec/" in path
+            or "/test/" in path or "/tests/" in path or "/t/" in path
+            or path.endswith(("_spec.rb", "_test.rb", "_test.py", "_test.c", ".t"))
             or (name.startswith("test_") and name.endswith((".py", ".c"))))
 
 
@@ -90,28 +109,97 @@ def first_arg(node):
 
 
 # Implements [CPO§V9]
-def classify(lang, node):
+@functools.lru_cache(maxsize=None)
+def query_text(lang):
+    """A language's text-object query, with the queries it inherits."""
+    text = (QUERIES / f"{lang}.scm").read_text()
+    m = INHERITS.match(text)
+    if m:
+        text = "\n".join(query_text(x) for x in m.group(1).split(",")) + "\n" + text
+    return text
+
+
+@functools.lru_cache(maxsize=None)
+def query(lang):
+    return Query(LANGUAGES[lang], query_text(lang))
+
+
+# Implements [CPO§T66]
+def marks(lang, root):
+    """The declarations a language's text-object query finds in a tree,
+    as {(start, end, type): (kind, name)}, mapped onto Concipio's kinds: a
+    function, or a method where the grammar says so; a class that holds
+    functions, or any class or module of a language whose classes hold
+    them, as a scope that names its contents; and a C-family record type
+    holding only data, as a span named by its keyword."""
+    caps = QueryCursor(query(lang)).captures(root)
+    fns = {key(n): n for n in caps.get("function.outer", [])}
+    out = {}
+    for k, node in fns.items():
+        inner = next((c for c in node.named_children if key(c) in fns), None)
+        if node.type == "declaration":
+            continue  # a prototype declares a function; it is not one
+        if node.parent is not None and key(node.parent) in fns:
+            continue  # the decorated definition around it stands for it
+        target = inner or node
+        name = declared_name(target)
+        if name:
+            out[k] = ("method" if "method" in target.type else "function", name)
+    for node in caps.get("class.outer", []):
+        if node.type.endswith("_specifier") and within(node, ("field_declaration",
+                                                               "function_definition")):
+            continue  # a record in another's fields, or in a function, is part of it
+        word = node.type.split("_")[0]
+        holds = any(node.start_byte <= f.start_byte and f.end_byte <= node.end_byte
+                    for f in fns.values() if f is not node)
+        name = declared_name(node)
+        if node.type.endswith("_specifier") and not holds:
+            out[key(node)] = (word, f"{word} {name or '(anonymous)'}")
+        elif name:
+            out[key(node)] = (f"{word} scope", name)
+    return out
+
+
+def key(node):
+    return node.start_byte, node.end_byte, node.type
+
+
+def within(node, types):
+    """Whether any node around this one is of one of these types."""
+    p = node.parent
+    while p is not None:
+        if p.type in types:
+            return True
+        p = p.parent
+    return False
+
+
+def declared_name(node):
+    """A declaration's name: its `name` field, or the identifier inside its
+    declarator."""
+    name = node.child_by_field_name("name")
+    if name is not None:
+        return node_text(name)
+    d = node.child_by_field_name("declarator")
+    return declarator_name(d) if d is not None else None
+
+
+# Implements [CPO§T68]
+def classify(lang, node, found=None):
     """Return (kind, name) if the node is a named declaration or a scope
-    that names its contents, else None. Kinds that end in "scope" give
-    names but are never spans."""
-    t = node.type
-    if lang == "c":
-        return classify_c(node)
-    if lang == "python":
-        if t == "class_definition":
-            return "class scope", node_text(node.child_by_field_name("name"))
-        if t == "function_definition":
-            return "function", node_text(node.child_by_field_name("name"))
+    that names its contents, else None, from the language's query [T66]
+    and the few things a query does not mark: C's macros and typedefs, and
+    Ruby's blocks, such as RSpec's."""
+    if found is not None and key(node) in found:
+        return found[key(node)]
+    if lang in ("c", "cpp"):
+        t = node.type
+        if t == "type_definition":
+            return "typedef", declarator_name(node.child_by_field_name("declarator"))
+        if t in ("preproc_def", "preproc_function_def"):
+            return "macro", node_text(node.child_by_field_name("name"))
         return None
-    if lang == "bash":
-        if t == "function_definition":
-            return "function", node_text(node.child_by_field_name("name"))
-        return None
-    if t in ("class", "module"):
-        return f"{t} scope", node_text(node.child_by_field_name("name"))
-    if t in ("method", "singleton_method"):
-        return "method", node_text(node.child_by_field_name("name"))
-    if t == "call" and node.child_by_field_name("block"):
+    if lang == "ruby" and node.type == "call" and node.child_by_field_name("block"):
         method = node_text(node.child_by_field_name("method"))
         arg = first_arg(node)
         label = f"{method} {arg}".strip()
@@ -129,36 +217,21 @@ def declarator_name(node):
     """The identifier inside a C declarator, through pointers, arrays, and
     parameter lists."""
     while node is not None and node.type not in ("identifier", "field_identifier",
-                                                   "type_identifier"):
+                                                   "type_identifier", "qualified_identifier",
+                                                   "destructor_name", "operator_name"):
         node = node.child_by_field_name("declarator")
     return node_text(node)
-
-
-def classify_c(node):
-    t = node.type
-    if t == "function_definition":
-        return "function", declarator_name(node.child_by_field_name("declarator"))
-    if t in ("struct_specifier", "union_specifier", "enum_specifier") and \
-            node.child_by_field_name("body") is not None and \
-            node.parent is not None and node.parent.type in ("translation_unit", "declaration",
-                                                             "type_definition"):
-        word = t.split("_")[0]
-        return word, f"{word} {node_text(node.child_by_field_name('name')) or '(anonymous)'}"
-    if t == "type_definition":
-        return "typedef", declarator_name(node.child_by_field_name("declarator"))
-    if t in ("preproc_def", "preproc_function_def"):
-        return "macro", node_text(node.child_by_field_name("name"))
-    return None
 
 
 def declarations(lang, text):
     """Return a list of (start, end, kind, name, ancestors) for every
     classified node, with 1-based inclusive line numbers."""
     tree = Parser(LANGUAGES[lang]).parse(text.encode())
+    marked = marks(lang, tree.root_node)
     found = []
 
     def walk(node, ancestors):
-        c = classify(lang, node)
+        c = classify(lang, node, marked)
         here = ancestors
         if c:
             kind, name = c

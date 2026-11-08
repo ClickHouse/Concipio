@@ -10,12 +10,12 @@ audit it drove found eight serious defects, which agents then fixed.
 
 ## Install
 
-Concipio is not published yet. Ask Josh for access to the repository,
-then install it as a tool:
+Concipio lives at `ClickHouse/Concipio`, visible inside ClickHouse.
+Install it as a tool, at its latest release:
 
 ```sh
-uv tool install git+ssh://<repository>   # pending: where it will live
-uv tool update-shell                     # puts ~/.local/bin, where cpo is, on PATH
+uv tool install git+ssh://git@github.com/ClickHouse/Concipio.git@v0.0.1
+uv tool update-shell     # puts ~/.local/bin, where cpo is, on PATH
 ```
 
 If `cpo` is "command not found" afterwards, open a new shell, or add

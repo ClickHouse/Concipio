@@ -286,6 +286,9 @@ what rules it keeps, through its guards and their comments.
   - **CPO§T68:** What a query does not mark stays Concipio's own: C's
     macros and typedefs, Ruby's blocks such as RSpec's, and which
     declaration a comment documents [T8].
+- **CPO§T67:** Concipio reads Markdown in its common spellings, `.md`,
+  `.mdx`, and `.markdown`, so the docs of a site such as Mintlify count
+  as docs.
 
 ## Views of code
 

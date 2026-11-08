@@ -55,7 +55,7 @@ class Index:
         noticed on the next request."""
         out = []
         for f in [*files, ".cpo"]:
-            if f.endswith(".md") or f == ".cpo":
+            if docs.is_doc(f) or f == ".cpo":
                 try:
                     out.append((f, (self.root / f).stat().st_mtime_ns))
                 except FileNotFoundError:
@@ -301,7 +301,7 @@ class Server:
             if not m.start() <= col <= m.end():
                 continue
             before = line[:m.start()]
-            linked = re.search(r"\]\(\s*<?([^)>\s#]+\.md)[^)]*\)[\s,]*$", before)
+            linked = re.search(r"\]\(\s*<?([^)>\s#]+\.(?:md|mdx|markdown))[^)]*\)[\s,]*$", before)
             target = (path.parent / linked.group(1)).resolve() if linked else path
             try:
                 heads = docs.numbered_headings(target.read_text(errors="replace"))

@@ -1,6 +1,6 @@
 import pytest
 
-from concipio import spans
+from concipio import docs, spans
 
 
 @pytest.mark.parametrize("lang", sorted(spans.LANGUAGES))
@@ -33,3 +33,11 @@ def test_c_structs_inside_include_guards_count_and_loop_macros_do_not():
     assert ("struct", "struct ring") in got and ("function", "sum") in got
     assert all(name for _, name in got), "a loop macro is not a nameless function"
 
+
+def test_mdx_docs_define_statements(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "guide.mdx").write_text("# Guide\n\n- **G§1:** Metrics flush every second.\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    _, defs, _ = docs.load(root=tmp_path)
+    assert "G§1" in defs

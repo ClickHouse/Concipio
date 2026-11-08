@@ -7,7 +7,7 @@ import hashlib
 import math
 import re
 
-from . import lint, spans
+from . import docs, lint, spans
 
 KINDS = {"function", "method", "macro"}
 FUNCTION_MACRO = re.compile(r"^\s*#\s*define\s+\w+\(")
@@ -85,7 +85,7 @@ def claims(root, fns, defs):
 
     for d in defs.values():
         for c in d.citations:
-            if not c.path.endswith(".md"):
+            if not docs.is_doc(c.path):
                 claim(c.path, c.line, lambda fn, t=d.tag: tags[key(fn)].add(t))
     for path, mine in where.items():
         for n, line in enumerate(mine[0]["text"].splitlines(), 1):

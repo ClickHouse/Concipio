@@ -58,6 +58,17 @@ def repo_root(start="."):
 OWN_FILES = (".cpo", ".cpo-baseline.toml")
 
 
+# Markdown in its common spellings, MDX included, as documentation sites
+# such as Mintlify and Docusaurus write it [T67].
+DOC_EXTENSIONS = (".md", ".mdx", ".markdown")
+
+
+# Implements [CPO§T67]
+def is_doc(path):
+    """Whether a file is Markdown, which Concipio reads as a doc."""
+    return str(path).endswith(DOC_EXTENSIONS)
+
+
 def tracked_files(root):
     """The files git tracks or would, as they stand on disk: a tracked file
     deleted but not yet committed is gone, and a submodule is not a file."""
@@ -216,7 +227,7 @@ def find_definitions(root, files, pattern=None):
     defs = {}
     errors = []
     for path in files:
-        if not path.endswith(".md"):
+        if not is_doc(path):
             continue
         raw = (root / path).read_text(errors="replace").splitlines()
         prose = [line for _, line in prose_lines("\n".join(raw))]
@@ -273,8 +284,8 @@ def find_citations(root, files, defs):
             text = (root / path).read_text()
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
-        is_doc = path.endswith(".md")
-        lines = prose_lines(text) if is_doc else enumerate(text.splitlines(), 1)
+        doc = is_doc(path)
+        lines = prose_lines(text) if doc else enumerate(text.splitlines(), 1)
         prefixes = defined_prefixes.get(path, set())
         # Implements [CPO§T7]
         short_prefix = next(iter(prefixes)) if len(prefixes) == 1 else None
@@ -287,7 +298,7 @@ def find_citations(root, files, defs):
                     role = role_before(line, m.start() - 1)
                     defs[tag].citations.append(
                         Citation(path, n, role, line.strip(), m.start(), m.end()))
-            if is_doc and short_prefix:
+            if doc and short_prefix:
                 for m in SHORT_LIST.finditer(line):
                     for im in re.finditer(ID, m.group(1)):
                         tag = f"{short_prefix}§{im.group(0)}"
@@ -417,22 +428,22 @@ def names_a_doc_in_code(before, names):
     if not words:
         return False
     word = words[-1].strip("([,;:`'\"")
-    return bool(word) and (bool(re.search(r"\w/\w", word)) or word.endswith(".md")
+    return bool(word) and (bool(re.search(r"\w/\w", word)) or is_doc(word)
                            or word in names)
 
 
 def source_citations(root, files, defs, srcs):
     # The words that name a doc: each source's prefix, and each doc's name.
     names = {src["prefix"] for src in srcs} | {
-        Path(f).stem for f in files if f.endswith(".md")} | {
-        Path(f).name for f in files if f.endswith(".md")}
+        Path(f).stem for f in files if is_doc(f)} | {
+        Path(f).name for f in files if is_doc(f)}
     for path in files:
         try:
             text = (Path(root) / path).read_text()
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
-        named = file_default(text, srcs) if not path.endswith(".md") else None
-        lines = list(prose_lines(text)) if path.endswith(".md") else \
+        named = file_default(text, srcs) if not is_doc(path) else None
+        lines = list(prose_lines(text)) if is_doc(path) else \
             list(enumerate(text.splitlines(), 1))
         prev = ""
         for n, line in lines:
@@ -447,7 +458,7 @@ def source_citations(root, files, defs, srcs):
                 patterns = [src["cite"]]
                 # In code, a bare §5c means the doc the file names, or else
                 # the one the project names [T44].
-                if not path.endswith(".md") and (
+                if not is_doc(path) and (
                         src is named or (named is None and src["code_default"])):
                     patterns.append(BARE_SECTION)
                 # Inside its own doc, a bare §5c means that doc's §5c.
@@ -461,7 +472,7 @@ def source_citations(root, files, defs, srcs):
                         tag = f"{src['prefix']}§{m['id']}"
                         # In code, a number after another doc's name is that
                         # doc's, and not the default's [T62].
-                        if pattern is BARE_SECTION and not path.endswith(".md") and \
+                        if pattern is BARE_SECTION and not is_doc(path) and \
                                 foreign(m):
                             continue
                         if tag in defs and m.end() not in seen:

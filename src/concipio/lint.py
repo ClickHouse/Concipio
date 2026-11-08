@@ -64,7 +64,7 @@ def lint(root, files, defs, statement_limit=STATEMENT_LIMIT, section_limit=SECTI
     for path in files:
         # A doc that defines no statements is not a design: notes, reports,
         # and records of consultations are free to run long.
-        if not path.endswith(".md") or path not in designs:
+        if not docs.is_doc(path) or path not in designs:
             continue
         text = (root / path).read_text(errors="replace")
         for line, level, title, n in sections(text):
@@ -90,7 +90,7 @@ def links_of(path, text):
 
 def doc_graph(root, files, defs):
     """Docs joined by Markdown links and tag citations, either way."""
-    md = [f for f in files if f.endswith(".md")]
+    md = [f for f in files if docs.is_doc(f)]
     known = set(md)
     edges = {f: set() for f in md}
 
@@ -191,7 +191,7 @@ def breadth(root, defs):
     for d in defs.values():
         impl, tests, nodes = 0, 0, set()
         for c in d.citations:
-            if c.path.endswith(".md"):
+            if docs.is_doc(c.path):
                 continue
             if c.path not in cache:
                 try:
@@ -431,7 +431,7 @@ def dangling_sections(root, files):
         heads = docs.numbered_headings(text)
         if not heads:
             continue
-        linked = re.compile(r"\]\(\s*<?[^)>\s#]+\.md[^)]*\)[\s,]*$")
+        linked = re.compile(r"\]\(\s*<?[^)>\s#]+\.(?:md|mdx|markdown)[^)]*\)[\s,]*$")
         prev = (None, "")
         for n, line in docs.prose_lines(text):
             if docs.NUMBERED.match(line):
@@ -507,7 +507,7 @@ def retired_terms(root, files, retired):
     pats = {t: re.compile(rf"(?<![\w]){re.escape(t)}(?![\w])") for t in retired}
     out = []
     for f in files:
-        md = f.endswith(".md")
+        md = docs.is_doc(f)
         if not md and not f.endswith(CODE_EXTENSIONS):
             continue
         try:
@@ -553,7 +553,7 @@ def stale_marks(root, files, defs, cfg):
             out.append({"path": d.path, "line": d.line, "what": f"{d.tag} ({d.name})",
                         "reason": str(d.fields[s["stale"]])})
     for f in files:
-        if f.endswith(".md"):
+        if docs.is_doc(f):
             fields = docs.doc_fields((root / f).read_text(errors="replace"), pattern)
             if s["stale"] in fields:
                 out.append({"path": f, "line": 1, "what": f, "reason": str(fields[s["stale"]])})
@@ -615,7 +615,7 @@ def coverage(root, files, defs, exclude=(), strict=False):
     cited = {}
     for d in defs.values():
         for c in d.citations:
-            if not c.path.endswith(".md") and (not strict or c.role != "reference"):
+            if not docs.is_doc(c.path) and (not strict or c.role != "reference"):
                 cited.setdefault(c.path, set()).add(c.line)
     out = []
     for f in files:
@@ -656,7 +656,7 @@ def code_changed_since(root, d, stamp):
     """A code file citing the statement that git says changed after the
     date, or None."""
     import subprocess
-    for path in sorted({c.path for c in d.citations if not c.path.endswith(".md")}):
+    for path in sorted({c.path for c in d.citations if not docs.is_doc(c.path)}):
         out = subprocess.run(["git", "log", "-1", "--format=%cs", f"--since={stamp} 23:59:59",
                               "--", path], cwd=root, capture_output=True, text=True)
         if out.stdout.strip():

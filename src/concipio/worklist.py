@@ -67,7 +67,7 @@ def code_index(root, files):
     """Every declaration in the code, by name, as (path, first, last)."""
     out = {}
     for f in files:
-        if f.endswith(".md"):
+        if docs.is_doc(f):
             continue
         try:
             text = (root / f).read_text(errors="replace")
@@ -96,7 +96,7 @@ def claimed_code(root, d, index, tracked):
             for path, start, end in index[token]:
                 regions.update(windows(root, path, start, end, names - {token}))
     for c in d.citations:
-        if c.path.endswith(".md"):
+        if docs.is_doc(c.path):
             continue
         # A citation covers the declaration its comment documents [T8].
         found = decls_of(root, c.path)

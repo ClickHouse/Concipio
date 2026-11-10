@@ -1,6 +1,7 @@
 """Find the spans a change touches."""
 
 import functools
+import importlib
 import re
 import subprocess
 from dataclasses import dataclass
@@ -8,29 +9,27 @@ from dataclasses import dataclass
 import warnings
 from pathlib import Path
 
-import tree_sitter_bash
-import tree_sitter_c
-import tree_sitter_cpp
-import tree_sitter_go
-import tree_sitter_perl
-import tree_sitter_python
-import tree_sitter_ruby
-import tree_sitter_rust
 from tree_sitter import Language, Parser, Query, QueryCursor
 
+# Each language's grammar is its own package. One that is missing, as after
+# an update that added a language but no reinstall, costs only that
+# language, not every command.
+GRAMMARS = {"ruby": "tree_sitter_ruby", "bash": "tree_sitter_bash", "c": "tree_sitter_c",
+            "cpp": "tree_sitter_cpp", "go": "tree_sitter_go", "perl": "tree_sitter_perl",
+            "python": "tree_sitter_python", "rust": "tree_sitter_rust"}
+LANGUAGES, MISSING = {}, []
 with warnings.catch_warnings():
     # The Perl grammar still hands its language over as a bare pointer.
     warnings.simplefilter("ignore", DeprecationWarning)
-    LANGUAGES = {
-        "ruby": Language(tree_sitter_ruby.language()),
-        "bash": Language(tree_sitter_bash.language()),
-        "c": Language(tree_sitter_c.language()),
-        "cpp": Language(tree_sitter_cpp.language()),
-        "go": Language(tree_sitter_go.language()),
-        "perl": Language(tree_sitter_perl.language()),
-        "rust": Language(tree_sitter_rust.language()),
-        "python": Language(tree_sitter_python.language()),
-    }
+    for _lang, _module in GRAMMARS.items():
+        try:
+            LANGUAGES[_lang] = Language(importlib.import_module(_module).language())
+        except ImportError:
+            MISSING.append(_module)
+if MISSING:
+    import sys
+    print(f"cpo: {', '.join(MISSING)} not installed, so those languages are read as plain "
+          "text; reinstall Concipio to add them.", file=sys.stderr)
 QUERIES = Path(__file__).parent / "queries"
 INHERITS = re.compile(r"^; inherits: ([\w,]+)")
 RSPEC_SPANS = {"it", "specify", "example", "before", "after", "around",
@@ -66,6 +65,12 @@ def file_at(repo, rev, path):
 
 
 def language_of(path, text):
+    """The language Concipio parses a file as, if its grammar is installed."""
+    lang = guess_language(path, text)
+    return lang if lang in LANGUAGES else None
+
+
+def guess_language(path, text):
     if path.endswith((".rb", ".rake", ".ru", "Gemfile", "Rakefile")):
         return "ruby"
     if path.endswith((".c", ".h")):

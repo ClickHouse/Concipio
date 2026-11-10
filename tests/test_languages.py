@@ -57,3 +57,14 @@ def test_rust_impls_are_scopes_named_by_type_and_trait():
     assert names("rust", text) == [("struct", "struct Ring"), ("trait scope", "Take"),
                                    ("impl scope", "Take for Ring"), ("function", "take"),
                                    ("impl scope", "Ring"), ("function", "new")]
+
+
+def test_a_missing_grammar_disables_only_its_language():
+    import subprocess, sys
+    code = ("import sys; sys.modules['tree_sitter_go'] = None\n"
+            "from concipio import spans\n"
+            "print('go' in spans.LANGUAGES, spans.language_of('a.go', ''), "
+            "spans.language_of('a.c', ''))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.stdout.split() == ["False", "None", "c"]
+    assert "tree_sitter_go not installed" in out.stderr

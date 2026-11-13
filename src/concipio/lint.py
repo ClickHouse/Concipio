@@ -297,7 +297,7 @@ def check(root, files, defs, limits, cfg=None):
     problems = lint(root, files, defs, limits["statement_limit"], limits["section_limit"])
     problems += field_problems(root, files, defs, cfg or {}, limits["master"])
     problems += dangling_sections(root, files)
-    problems += dangling_tags(root, defs)
+    problems += dangling_tags(root, files, defs)
     problems += history_in_headings(root, files, defs, (cfg or {}).get("lint", {}).get("history_words"))
     problems += quoted_headings(root, defs)
     problems += unread_headings(root, files)
@@ -493,20 +493,41 @@ def names_a_doc(before):
 
 
 # Implements [CPO§T74]
-def dangling_tags(root, defs):
+def dangling_tags(root, files, defs):
     """Citations of tags no doc defines, under a prefix some doc does
     define or `.cpo` declares: a reference left behind when its target
-    was renamed, renumbered, or removed. One problem per file and tag,
-    valued by how often."""
+    was renamed, renumbered, or removed. A bare section number in code
+    that another doc numbers as a heading is that doc's, and not
+    dangling. One problem per file and tag, valued by how often."""
     known = {t.split("§", 1)[0] for t in defs} | {s["prefix"] for s in docs.sources(root)}
+    elsewhere = set()
+    for f in files:
+        if docs.is_doc(f):
+            try:
+                elsewhere |= set(docs.numbered_headings((root / f).read_text(errors="replace")))
+            except (FileNotFoundError, IsADirectoryError):
+                pass
     found = {}
-    for path, line, tag in getattr(defs, "unresolved", []):
-        if tag.split("§", 1)[0] in known:
-            first, count = found.get((path, tag), (line, 0))
-            found[(path, tag)] = (min(first, line), count + 1)
-    return [Problem(path, line, "dangling-tag",
-                    f"cites {tag}, which no doc defines: renamed, renumbered, or removed?",
-                    tag, count) for (path, tag), (line, count) in sorted(found.items())]
+    for path, line, tag, bare in getattr(defs, "unresolved", []):
+        prefix, ident = tag.split("§", 1)
+        if prefix not in known or (bare and ident in elsewhere):
+            continue
+        found.setdefault((path, tag), set()).add(line)
+    out = []
+    for (path, tag), lines in sorted(found.items()):
+        prefix, ident = tag.split("§", 1)
+        above = docs.numbered_parent(ident)
+        why = (f"no section {ident}, though {prefix}§{above} exists: a list item, or a "
+               "section since renumbered?" if above and f"{prefix}§{above}" in defs
+               else "which no doc defines: renamed, renumbered, or removed?")
+        # One problem per file and tag, which a baseline counts; every line
+        # it is cited on is named, so none is missed.
+        also = sorted(lines)[1:]
+        where = f" Also at line{'s' if len(also) > 1 else ''} {', '.join(map(str, also))}." \
+            if also else ""
+        out.append(Problem(path, min(lines), "dangling-tag", f"cites {tag}, {why}{where}",
+                           tag, len(lines)))
+    return out
 
 
 # Implements [CPO§T43]

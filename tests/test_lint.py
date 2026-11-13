@@ -608,3 +608,53 @@ def test_a_citation_of_a_tag_no_doc_defines_is_dangling(tmp_path):
     _, d = run_lint(tmp_path)
     got = sorted((p["path"], p["key"]) for p in d["problems"] if p["rule"] == "dangling-tag")
     assert got == [("README.md", "X§9"), ("a.c", "DESIGN§4"), ("a.c", "X§7")]
+
+
+def test_ranges_other_docs_sections_and_list_items_are_not_dangling(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md) and [notes](notes.md).\n",
+        "DESIGN.md": "# Design\n\n## 1. Scope\n\nA queue of [1, 64] slots.\n\n## 15. Lessons\n\n"
+                     "1. One.\n",
+        "notes.md": "# Notes\n\n## 8b. Bands\n\nText.\n",
+        "a.c": "/* docs §8b; notes.md §6, §11c; DESIGN §15.10; §9z */\nint a;\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\nbare_in_code = true\n')
+    _, d = run_lint(tmp_path)
+    got = {p["key"]: p["message"] for p in d["problems"] if p["rule"] == "dangling-tag"}
+    assert sorted(got) == ["DESIGN§15.10", "DESIGN§9z"], \
+        "a range, another doc's section, and numbers after a named doc are not dangling"
+    assert "DESIGN§15 exists" in got["DESIGN§15.10"]
+
+
+def test_every_line_citing_a_dangling_tag_is_named(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\nSee [the design](DESIGN.md).\n",
+        "DESIGN.md": "# Design\n\n## 5. Drain\n\nText.\n",
+        "a.c": "/* the §5d′ marker */\nint a;\n/* Angels-first, §5d′, rebuilt */\nint b;\n"
+               "/* §5d′. */\nint c;\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\nbare_in_code = true\n')
+    _, d = run_lint(tmp_path)
+    [p] = [p for p in d["problems"] if p["rule"] == "dangling-tag"]
+    assert (p["line"], p["value"]) == (1, 3) and "Also at lines 3, 5." in p["message"]
+
+
+def test_a_full_tag_with_a_section_suffix_resolves(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# R\n\n[d](DESIGN.md)\n",
+        "DESIGN.md": "# D\n\n## 5c. Part\n\nText.\n",
+        "a.c": "/* Implements DESIGN§5c, and DESIGN§5d. */\nint a;\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\n')
+    _, d = run_lint(tmp_path)
+    got = sorted(p["key"] for p in d["problems"] if p["rule"] == "dangling-tag")
+    assert got == ["DESIGN§5d"], "5c resolves, and 5d is reported whole"
+
+
+def test_a_bare_number_after_a_source_citation_is_that_sources(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# R\n\n[d](DESIGN.md) [c](CAVEATS.md)\n",
+        "DESIGN.md": "# D\n\n## 1. One\n\nText.\n",
+        "CAVEATS.md": "# C\n\n## 2. Two\n\nText.\n\n## 3. Three\n\nText.\n",
+        "a.c": "/* See DESIGN §1 and CAVEATS §2, §3. */\nint a;\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\nbare_in_code = true\n\n[[source]]\ndoc = "CAVEATS.md"\n')
+    _, d = run_lint(tmp_path)
+    assert [p for p in d["problems"] if p["rule"] in ("dangling-tag", "dangling-section")] == [], \
+        "§3 is CAVEATS', not DESIGN's"

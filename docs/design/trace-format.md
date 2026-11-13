@@ -40,6 +40,13 @@ overrides a default.
   defined nowhere now is *retired*; citing it fails the check. Retiring a
   statement leaves its old citations visibly broken instead of silently
   pointing at something new.
+  - **CPO§T74:** `cpo lint` reports every citation of a tag no doc
+    defines, in any of its forms: `CPO§T5`, `[T5]` in a doc that owns
+    the prefix, `DESIGN §5c`, and a bare `§5c` in code. A citation counts
+    only under a prefix the project uses, so an example such as `X§1`
+    does not, and neither does a tag pinned to another repository's
+    release [T30]. When a doc is rewritten, this is what finds the
+    references it left behind.
 - **CPO§T31:** An ID minted on a branch is provisional and carries a short
   random suffix, as in `CPO§M50.k3`, so that no two branches mint the same
   one. At merge, Concipio assigns the next free number and records the

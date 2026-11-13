@@ -595,3 +595,16 @@ def test_sections_nest_by_their_numbers_and_links_name_real_headings(tmp_path):
     assert defs["DESIGN§1a"].parent == "DESIGN§1"
     _, d = run_lint(tmp_path)
     assert [p["key"] for p in d["problems"] if p["rule"] == "broken-link"] == ["DESIGN.md#gone"]
+
+
+def test_a_citation_of_a_tag_no_doc_defines_is_dangling(tmp_path):
+    lint_repo(tmp_path, {
+        "README.md": "# Top\n\n- **X§1:** One.\n- **X§2:** Two, after [X§1] and [X§9].\n\n"
+                     "See [the design](DESIGN.md).\n",
+        "DESIGN.md": "# Design\n\n## 1. Scope\n\nText.\n",
+        "a.c": "/* Implements X§7, and DESIGN §4, but not TPC-C 5.11 §3.3.2, nor OTHER§3,\n"
+               " * nor VENDOR§T3@v1.2. */\nint a;\n",
+    }, cpo='[[source]]\ndoc = "DESIGN.md"\nbare_in_code = true\n')
+    _, d = run_lint(tmp_path)
+    got = sorted((p["path"], p["key"]) for p in d["problems"] if p["rule"] == "dangling-tag")
+    assert got == [("README.md", "X§9"), ("a.c", "DESIGN§4"), ("a.c", "X§7")]

@@ -341,6 +341,10 @@ def find_citations(root, files, defs):
                     role = role_before(line, m.start() - 1)
                     defs[tag].citations.append(
                         Citation(path, n, role, line.strip(), m.start(), m.end()))
+                elif not line[m.end():m.end() + 1] == "@":
+                    # A tag pinned to another repository's release is that
+                    # repository's to check [T30].
+                    unresolved(defs, path, n, tag)
             if doc and short_prefix:
                 for m in SHORT_LIST.finditer(line):
                     for im in re.finditer(ID, m.group(1)):
@@ -350,6 +354,8 @@ def find_citations(root, files, defs):
                             defs[tag].citations.append(Citation(
                                 path, n, "reference", line.strip(), col,
                                 col + len(im.group(0))))
+                        else:
+                            unresolved(defs, path, n, tag)
 
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -504,8 +510,10 @@ def names_a_doc_in_code(before, names):
     if not words:
         return False
     word = words[-1].strip("([,;:`'\"")
+    # A version number names another document, as `TPC-C 5.11 §3.3.2` does a
+    # specification's section.
     return bool(word) and (bool(re.search(r"\w/\w", word)) or is_doc(word)
-                           or word in names)
+                           or word in names or bool(re.fullmatch(r"v?\d+(\.\d+)+", word)))
 
 
 def source_citations(root, files, defs, srcs):
@@ -551,11 +559,20 @@ def source_citations(root, files, defs, srcs):
                         if pattern is BARE_SECTION and not is_doc(path) and \
                                 foreign(m):
                             continue
+                        # The § inside a full tag, `X§7`, is the tag's, not a
+                        # bare section number.
+                        if pattern is BARE_SECTION and m.start() > 0 and \
+                                (line[m.start() - 1].isalnum() or line[m.start() - 1] == "_"):
+                            continue
                         if tag in defs and m.end() not in seen:
                             seen.add(m.end())
                             defs[tag].citations.append(Citation(
                                 path, n, role_before(line, m.start() - 1), line.strip(),
                                 m.start(), m.end()))
+                        elif tag not in defs and not (pattern is BARE_SECTION and
+                                                      path == src["doc"]):
+                            # A source's own bare numbers are dangling-section's.
+                            unresolved(defs, path, n, tag)
             prev = line
 
 
@@ -592,13 +609,26 @@ def archived(root, files):
     return {f for f in files if any(fnmatch.fnmatch(f, g) for g in globs)}
 
 
+class Defs(dict):
+    """The definitions, by tag, and the citations of tags no doc defines."""
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.unresolved = []
+
+
+def unresolved(defs, path, line, tag):
+    if isinstance(defs, Defs):
+        defs.unresolved.append((path, line, tag))
+
+
 def load(start=".", root=None, files=None):
     root = root or repo_root(start)
     files = files if files is not None else tracked_files(root)
     old = archived(root, files)
     files = [f for f in files if f not in old]
     pattern = field_pattern(root)
-    defs, errors = find_definitions(root, files, pattern)
+    found, errors = find_definitions(root, files, pattern)
+    defs = Defs(found)
     srcs = sources(root)
     for src in srcs:
         heading_definitions(root, src, defs, errors, pattern)

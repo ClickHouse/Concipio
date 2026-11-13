@@ -343,10 +343,20 @@ def find_citations(root, files, defs):
                         Citation(path, n, role, line.strip(), m.start(), m.end()))
                 elif not line[m.end():m.end() + 1] == "@":
                     # A tag pinned to another repository's release is that
-                    # repository's to check [T30].
-                    unresolved(defs, path, n, tag)
+                    # repository's to check [T30]. A numbered section's ID
+                    # runs on past the digits, as `DESIGN§5c` does; the
+                    # source reader counts such a citation when it resolves.
+                    full = re.match(SECTION_ID, line[m.start(2):])
+                    full = f"{m.group(1)}§{full.group(0)}" if full else tag
+                    if full not in defs:
+                        unresolved(defs, path, n, full)
             if doc and short_prefix:
                 for m in SHORT_LIST.finditer(line):
+                    # A list of plain numbers cites tags only if each is one;
+                    # otherwise, as `[1, 64]`, it is a range, and cites nothing.
+                    if re.fullmatch(r"[\d,\s]+", m.group(1)) and not all(
+                            f"{short_prefix}§{x}" in defs for x in re.findall(r"\d+", m.group(1))):
+                        continue
                     for im in re.finditer(ID, m.group(1)):
                         tag = f"{short_prefix}§{im.group(0)}"
                         if tag in defs:
@@ -531,6 +541,13 @@ def source_citations(root, files, defs, srcs):
             list(enumerate(text.splitlines(), 1))
         prev = ""
         for n, line in lines:
+            # A bare number belongs to the nearest doc named before it on the
+            # line: another doc's, as in `notes.md §6, §11c`, until a source's
+            # own citation, as `DESIGN §15`, hands what follows back to it.
+            foreign_at = []
+            cited = [(m.start(), m.end()) for x in srcs for m in x["cite"].finditer(line)]
+            cited_by = sorted((m.start(), x) for x in srcs for m in x["cite"].finditer(line))
+            cited_at = [a for a, _ in cited]
             # A bare number that opens a line may have wrapped away from the
             # doc name ending the line before.
             def foreign(m, line=line, prev=prev):
@@ -553,12 +570,26 @@ def source_citations(root, files, defs, srcs):
                 seen = set()
                 for pattern in patterns:
                     for m in pattern.finditer(line):
-                        tag = f"{src['prefix']}§{m['id']}"
+                        owner = src
                         # In code, a number after another doc's name is that
                         # doc's, and not the default's [T62].
-                        if pattern is BARE_SECTION and not is_doc(path) and \
-                                foreign(m):
-                            continue
+                        if pattern is BARE_SECTION and not is_doc(path):
+                            if any(a <= m.start() < b for a, b in cited):
+                                continue  # part of a source's own citation, `DESIGN §5`
+                            if foreign(m):
+                                foreign_at.append(m.start())
+                                continue
+                            f = max((x for x in foreign_at if x < m.start()), default=None)
+                            c = max((x for x in cited_by if x[0] < m.start()),
+                                    default=None, key=lambda x: x[0])
+                            if f is not None and (c is None or f > c[0]):
+                                continue
+                            # After a source's own citation, a bare number
+                            # is that source's, as `§16` in `DESIGN §15, §16`
+                            # [T75].
+                            if c is not None:
+                                owner = c[1]
+                        tag = f"{owner['prefix']}§{m['id']}"
                         # The § inside a full tag, `X§7`, is the tag's, not a
                         # bare section number.
                         if pattern is BARE_SECTION and m.start() > 0 and \
@@ -572,7 +603,7 @@ def source_citations(root, files, defs, srcs):
                         elif tag not in defs and not (pattern is BARE_SECTION and
                                                       path == src["doc"]):
                             # A source's own bare numbers are dangling-section's.
-                            unresolved(defs, path, n, tag)
+                            unresolved(defs, path, n, tag, bare=pattern is BARE_SECTION)
             prev = line
 
 
@@ -616,9 +647,11 @@ class Defs(dict):
         self.unresolved = []
 
 
-def unresolved(defs, path, line, tag):
+def unresolved(defs, path, line, tag, bare=False):
+    """Note a citation of a tag no doc defines; `bare` when it was a bare
+    section number that might belong to another doc."""
     if isinstance(defs, Defs):
-        defs.unresolved.append((path, line, tag))
+        defs.unresolved.append((path, line, tag, bare))
 
 
 def load(start=".", root=None, files=None):

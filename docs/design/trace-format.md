@@ -47,6 +47,15 @@ overrides a default.
     does not, and neither does a tag pinned to another repository's
     release [T30]. When a doc is rewritten, this is what finds the
     references it left behind.
+    - **CPO§T75:** A bare section number in code belongs to the nearest
+      doc named before it on its line, so in `notes.md §6, §11c` both are
+      the notes', until a source's own citation such as `DESIGN §15`
+      hands what follows back. One that the default source lacks but
+      another doc numbers as a heading is that doc's, not dangling. A
+      bracketed list of plain numbers cites tags only if every number is
+      one; otherwise, as `[1, 64]`, it is a range. A report names every
+      line a dangling tag is cited on, and says so when its parent
+      section exists, as for a numbered list item.
 - **CPO§T31:** An ID minted on a branch is provisional and carries a short
   random suffix, as in `CPO§M50.k3`, so that no two branches mint the same
   one. At merge, Concipio assigns the next free number and records the

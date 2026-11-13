@@ -297,6 +297,7 @@ def check(root, files, defs, limits, cfg=None):
     problems = lint(root, files, defs, limits["statement_limit"], limits["section_limit"])
     problems += field_problems(root, files, defs, cfg or {}, limits["master"])
     problems += dangling_sections(root, files)
+    problems += dangling_tags(root, defs)
     problems += history_in_headings(root, files, defs, (cfg or {}).get("lint", {}).get("history_words"))
     problems += quoted_headings(root, defs)
     problems += unread_headings(root, files)
@@ -491,6 +492,23 @@ def names_a_doc(before):
     return sum(c.isupper() for c in word) >= 2 or any(c.isdigit() or c in "._-" for c in word)
 
 
+# Implements [CPO§T74]
+def dangling_tags(root, defs):
+    """Citations of tags no doc defines, under a prefix some doc does
+    define or `.cpo` declares: a reference left behind when its target
+    was renamed, renumbered, or removed. One problem per file and tag,
+    valued by how often."""
+    known = {t.split("§", 1)[0] for t in defs} | {s["prefix"] for s in docs.sources(root)}
+    found = {}
+    for path, line, tag in getattr(defs, "unresolved", []):
+        if tag.split("§", 1)[0] in known:
+            first, count = found.get((path, tag), (line, 0))
+            found[(path, tag)] = (min(first, line), count + 1)
+    return [Problem(path, line, "dangling-tag",
+                    f"cites {tag}, which no doc defines: renamed, renumbered, or removed?",
+                    tag, count) for (path, tag), (line, count) in sorted(found.items())]
+
+
 # Implements [CPO§T43]
 def dangling_sections(root, files):
     """Bare section numbers that name no section of their own doc, in the
@@ -638,7 +656,7 @@ def stale_marks(root, files, defs, cfg):
 # Implements [CPO§M52]
 STANDARDS = {
     "completeness": ("orphan",),
-    "correctness": ("dangling-section", "stale-updated", "schema", "undeclared-field",
+    "correctness": ("dangling-section", "dangling-tag", "stale-updated", "schema", "undeclared-field",
                     "field-syntax", "unverified-critical", "stale-critical",
                     "history-in-heading", "retired-term",
                     "retired-term-live", "unread-heading", "unbacked-claim",

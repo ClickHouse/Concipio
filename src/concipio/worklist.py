@@ -69,14 +69,8 @@ def code_index(root, files):
     for f in files:
         if docs.is_doc(f):
             continue
-        try:
-            text = (root / f).read_text(errors="replace")
-        except (FileNotFoundError, IsADirectoryError):
-            continue
-        lang = spans.language_of(f, text)
-        if not lang:
-            continue
-        for start, end, kind, name, _ in spans.declarations(lang, text):
+        found = decls_of(root, f)
+        for start, end, kind, name, _ in found[0] if found else ():
             if name and not kind.endswith("scope"):
                 out.setdefault(name.split()[-1], []).append((f, start, end))
     return out
@@ -132,20 +126,42 @@ def windows(root, path, start, end, names):
 
 
 _decls = {}
+_lines = {}
 
 
-def decls_of(root, path):
-    """A code file's declarations and lines, read once per checkout."""
+def stamp(root, path):
+    """What changes when a file does, so a cache read once per process
+    still sees an edit made since."""
+    try:
+        st = (root / path).stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
+def lines_in(root, path):
+    """A file's lines, read once until it changes."""
     key = (str(root), path)
-    if key not in _decls:
+    now = stamp(root, path)
+    if key not in _lines or _lines[key][0] != now:
         try:
             text = (root / path).read_text(errors="replace")
         except (FileNotFoundError, IsADirectoryError):
-            _decls[key] = None
-            return None
-        lang = spans.language_of(path, text)
-        _decls[key] = (spans.declarations(lang, text), text.splitlines()) if lang else None
-    return _decls[key]
+            text = None
+        _lines[key] = (now, text)
+    return _lines[key][1]
+
+
+def decls_of(root, path):
+    """A code file's declarations and lines, parsed once until it changes."""
+    key = (str(root), path)
+    now = stamp(root, path)
+    if key not in _decls or _decls[key][0] != now:
+        text = lines_in(root, path)
+        lang = spans.language_of(path, text) if text is not None else None
+        _decls[key] = (now, (spans.declarations(lang, text), text.splitlines())
+                       if lang else None)
+    return _decls[key][1]
 
 
 def pointers(d, tracked):
@@ -156,7 +172,7 @@ def pointers(d, tracked):
 
 def region_text(root, region):
     path, start, end = region
-    lines = (root / path).read_text(errors="replace").splitlines()
+    lines = (lines_in(root, path) or "").splitlines()
     return "\n".join(lines[(start or 1) - 1:end or len(lines)])
 
 
@@ -256,16 +272,211 @@ def lines_of(root, regions):
     return out
 
 
+# Implements [CPO§W40]
+DRAFT_LINES = 300
+
+
+class Draft:
+    """A run of one file's declarations that no unit claims, for an agent
+    to describe in the design [CPO§W40]."""
+
+    def __init__(self, root, path, decls):
+        self.path, self.decls = path, decls
+        self.line = decls[0][0]
+        self.tag = f"draft:{path}:{decls[0][3] or decls[0][0]}"
+        names = [d[3] for d in decls if d[3]]
+        self.name = ", ".join(names) if len(names) <= 6 else \
+            ", ".join(names[:5]) + f", and {len(names) - 5} more"
+        self.regions = [(path, a, b) for a, b, _, _ in decls]
+        self.print = records.fingerprint("\n\0\n".join(region_text(root, r)
+                                                       for r in self.regions))
+
+
+def outermost(found):
+    """A file's top-level declarations; a scope too large for one unit,
+    such as a long class, gives its members instead."""
+    out = []
+
+    def take(d):
+        if d[2].endswith("scope") and d[1] - d[0] >= DRAFT_LINES:
+            inner = [c for c in found if len(c[4]) == len(d[4]) + 1
+                     and c[4][-1] == (d[2], d[3]) and d[0] <= c[0] <= d[1]]
+            if inner:
+                for c in inner:
+                    take(c)
+                return
+        out.append(d)
+
+    for d in found:
+        if not d[4]:
+            take(d)
+    return sorted(out)
+
+
+SCRIPTS = {"bash", "perl"}
+
+
+def guard(d, lines):
+    """Whether a declaration is a header's include guard, which no design
+    describes."""
+    return d[2] == "macro" and bool(d[3]) and lines[d[0] - 1].split() == ["#define", d[3]] \
+        and any(line.split() == ["#ifndef", d[3]] for line in lines[:d[0]])
+
+
+def exempted(found, lines):
+    """The declarations a `CPO§exempt` comment marks as serving no design."""
+    out = set()
+    for n, line in enumerate(lines, 1):
+        if lint.EXEMPT.search(line):
+            node = lint.covered_node(found, n, lines)
+            if node:
+                out.add((node[0], node[1]))
+    return out
+
+
+def drafts(root, files, everything, exclude=()):
+    """The code no unit of the design claims and nobody exempts, in runs
+    of a file's top-level declarations that fit a brief. Tests are not
+    drafted; they are evidence for the design, not part of it."""
+    import fnmatch
+    claimed = lines_of(root, [r for _, regions, _ in everything for r in regions])
+    out, seen = [], set()
+    for f in files:
+        if docs.is_doc(f) or spans.is_test(f) or any(fnmatch.fnmatch(f, p) for p in exclude):
+            continue
+        got = decls_of(root, f)
+        if not got:
+            continue
+        found, lines = got
+        skip = exempted(found, lines)
+        run, size = [], 0
+        for d in outermost(found):
+            a, b = d[0], d[1]
+            if (a, b) in skip or guard(d, lines) or \
+                    any((f, n) in claimed for n in range(a, b + 1)):
+                continue
+            if run and size + b - a + 1 > DRAFT_LINES:
+                out.append(Draft(root, f, run))
+                run, size = [], 0
+            run.append((a, b, d[2], d[3]))
+            size += b - a + 1
+        if run:
+            out.append(Draft(root, f, run))
+    # Scripts that drive the code come after it.
+    out.sort(key=lambda x: spans.language_of(x.path, "") in SCRIPTS)
+    for x in out:
+        # Overloads can give two runs one name; the line tells them apart.
+        if x.tag in seen:
+            x.tag += f"@{x.line}"
+        seen.add(x.tag)
+    return out
+
+
+def under_scope(path, scope):
+    return not scope or any(path == s or path.startswith(s.rstrip("/") + "/") for s in scope)
+
+
+# Implements [CPO§W44]
+def add_lead(state, text, where=None, by=None):
+    """Add a lead, unless one with the same text and place exists."""
+    leads = state.setdefault("leads", {})
+    for tag, lead in leads.items():
+        if lead["text"] == text and lead.get("where") == where:
+            return tag
+    tag = f"lead-{len(leads) + 1}"
+    leads[tag] = {"text": text, "where": where, "by": by, "at": int(time.time())}
+    return tag
+
+
+def seed_leads(root, defs, state, files):
+    """An audit's first leads: every claim that a state cannot happen that
+    nothing backs, and every rule a guard keeps that no design records."""
+    from . import claims, helpers
+    cfg = docs.config(root)
+    exclude = cfg.get("exclude", [])
+    for r in claims.impossibility_claims(root, files, defs, exclude, cfg.get("unreachable", {})):
+        if not r["evidence"]:
+            add_lead(state, f"Nothing backs this claim that a state cannot happen "
+                            f"[{r['claim']}]: {r['text']}", f"{r['path']}:{r['line']}",
+                     "cpo unreachable")
+    for r in helpers.unwritten_rules(root, files, defs, exclude,
+                                     cfg.get("unwritten", {}).get("incident", [])):
+        add_lead(state, f"A guard keeps a rule no design records, `{r['guard'][:100]}`: "
+                        f"{r['comment']}", f"{r['path']}:{r['line']}", "cpo unwritten")
+
+
+def lead_print(lead):
+    return records.fingerprint(lead["text"] + "\0" + (lead.get("where") or ""))
+
+
+def lead_code(root, where):
+    """The code around a lead: its declaration if small, else the lines
+    around it."""
+    if not where or ":" not in where:
+        return []
+    path, _, line = where.rpartition(":")
+    if not line.isdigit() or not (root / path).is_file():
+        return []
+    line = int(line)
+    found = decls_of(root, path)
+    node = lint.covered_node(found[0], line, found[1]) if found else None
+    if node and node[1] - node[0] < LARGE:
+        return [(path, node[0], node[1])]
+    return [(path, max(1, line - 12), line + 12)]
+
+
+def outline(defs, root):
+    """The headings of the design so far, for a drafting brief."""
+    sources = {s["doc"] for s in docs.sources(root)}
+    return [f"{d.tag} {d.name}" for d in sorted(defs.values(), key=lambda d: (d.path, d.line))
+            if d.path in sources and d.heading]
+
+
 NO_AGENT = ("Concipio cannot tell which agent is asking ({why}). Run\n"
             "  export CPO_AGENT={token}\n"
             "and keep that line in any summary of your work, so a compacted context can "
             "resume its claims. A helper you start needs its own CPO_AGENT.")
 
 
+def items(root, defs, state, scope=(), files=None):
+    """Every item of an audit: the design's units to check, the code no
+    unit claims to draft, and the leads, each as (kind, tag, print, what)."""
+    files = files if files is not None else docs.tracked_files(root)
+    everything = survey(root, defs, (), files)
+    tags = {d.tag for d in units(root, defs, scope)} if scope else None
+    out = [("check", u[0].tag, u[2], u) for u in everything if tags is None or u[0].tag in tags]
+    code_scope = [s for s in scope if s not in defs]
+    # A scope of tags alone holds no code to draft.
+    if not scope or code_scope:
+        scoped = [f for f in files if under_scope(f, code_scope)]
+        out += [("draft", x.tag, x.print, x) for x in
+                drafts(root, scoped, everything, docs.config(root).get("exclude", []))]
+    return out + lead_items(state, scope, defs)
+
+
+def lead_items(state, scope, defs):
+    """An audit's leads as items, those in its scope."""
+    code_scope = [s for s in scope if s not in defs]
+    return [("lead", tag, lead_print(lead), lead) for tag, lead in state.get("leads", {}).items()
+            if not scope or code_scope and under_scope(
+                (lead.get("where") or "").rpartition(":")[0], code_scope)]
+
+
+def item_standing(state, kind, tag, fp, now):
+    st = standing(state, tag, fp, now)
+    # Drafted code no unit claims any more, as when its section was cut, is
+    # to be drafted again.
+    return "open" if kind == "draft" and st in ("drafted", "stale") else st
+
+
 # Implements [CPO§W8]
 def next_unit(root, store, defs, name, budget=6000, scope=()):
-    """Claim the next unit that needs checking, or resume the agent's own
-    claim, and return its brief."""
+    """Claim the next item that needs work, or resume the agent's own
+    claim, and return its brief: stale units first, then code to draft
+    [CPO§W40], then leads [CPO§W44], then units to check. An audit begun
+    on a design checks its units before its leads, and drafts last. No
+    agent is offered a section it drafted, since checking one's own draft
+    is no second read [CPO§W42]."""
     import uuid
     me, why = agent()
     if not me:
@@ -273,52 +484,119 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
     audit = Audit(store, name)
     now = int(time.time())
     reprint(root, store, name)
+    files = docs.tracked_files(root)
     with store.lock():
         state = audit.load()
-        found = survey(root, defs, scope)
-        mine = [t for t, c in state["claims"].items() if c["holder"] == me and c["until"] > now]
-        pick = next((u for u in found if u[0].tag in mine), None)
+        found = items(root, defs, state, scope, files)
+        if not state.get("seeded"):
+            # An audit begun with no design claiming code drafts one before
+            # checking it; one begun on a design checks it first [CPO§W40].
+            # One with outcomes already recorded gets no seeded leads, which
+            # would divert an audit under way.
+            state["drafts_first"] = not state["units"] and \
+                not any(i[0] == "check" and i[3][1] for i in found)
+            if not state["units"]:
+                seed_leads(root, defs, state, files)
+            state["seeded"] = True
+            found += lead_items(state, scope, defs)
+        drafted = state.get("drafted", {})
+        mine = {t for t, c in state["claims"].items() if c["holder"] == me and c["until"] > now}
+        st = {i[1]: item_standing(state, i[0], i[1], i[2], now) for i in found}
+        pick = next((i for i in found if i[1] in mine), None)
+        order = [("check", "stale"), ("draft", "open"), ("lead", "open"), ("check", "open")]
+        if not state.get("drafts_first", True):
+            order = [("check", "stale"), ("check", "open"), ("lead", "open"), ("draft", "open")]
+        for kind, want in order:
+            if pick is None:
+                pick = next((i for i in found if i[0] == kind and st[i[1]] == want
+                             and not (kind == "check" and drafted.get(i[1]) == me)), None)
         if pick is None:
-            # Stale verifications first: they were right once and may not be now.
-            order = sorted(found, key=lambda u: standing(state, u[0].tag, u[2], now) != "stale")
-            pick = next((u for u in order
-                         if standing(state, u[0].tag, u[2], now) in ("stale", "open")), None)
-        if pick is None:
+            audit.save(state)
             if not found:
                 return {"done": True, "message": (
                     "This repository has no design units for an audit to check: no doc "
                     ".cpo declares as a source, and no tagged statements. Declare a "
                     "design doc in .cpo, or write one first; `cpo help agent` says how.")}
+            own = [i[1] for i in found if i[0] == "check" and st[i[1]] == "open"]
+            if own:
+                return {"done": True, "message": (
+                    f"What is left in {name} you drafted: {', '.join(own[:8])}"
+                    + (", ..." if len(own) > 8 else "") + ". A second agent must check "
+                    "them; start a helper with its own CPO_AGENT and have it run "
+                    f"cpo audit next {name}.")}
             return {"done": True, "message": f"Nothing in {name} needs checking."}
-        d, regions, fp = pick
-        state["claims"][d.tag] = {"holder": me, "contact": contact(), "at": now,
-                                  "until": now + CLAIM_SECONDS}
+        kind, tag, fp, what = pick
+        claim = {"holder": me, "contact": contact(), "at": now, "until": now + CLAIM_SECONDS}
+        if kind == "draft":
+            claim["decls"] = [[what.path, a, b, n] for a, b, _, n in what.decls]
+        state["claims"][tag] = claim
         audit.save(state)
-    audit.log({"event": "claim", "unit": d.tag, "by": me})
+    audit.log({"event": "claim", "unit": tag, "by": me})
+    if kind == "check":
+        d, regions, _ = what
+        text, where, title = d.text, f"{d.path}:{d.line}", d.name
+    elif kind == "draft":
+        regions, title, where = what.regions, what.name, f"{what.path}:{what.line}"
+        text = draft_text(root, defs, name, tag)
+    else:
+        regions, title, where = lead_code(root, what.get("where")), "lead", what.get("where")
+        text = what["text"] + (f"\n\n(Noted by {what['by']}.)" if what.get("by") else "")
     code, left = [], budget * 4
     for r in regions:
-        text = region_text(root, r)
-        where = f"{r[0]}:{r[1]}-{r[2]}" if r[1] else r[0]
-        if len(text) > left:
-            code.append({"where": where, "text": None, "omitted": len(text.splitlines())})
+        body = region_text(root, r)
+        at = f"{r[0]}:{r[1]}-{r[2]}" if r[1] else r[0]
+        if len(body) > left:
+            code.append({"where": at, "text": None, "omitted": len(body.splitlines())})
             continue
-        left -= len(text)
-        code.append({"where": where, "text": text})
-    before = state["units"].get(d.tag)
+        left -= len(body)
+        code.append({"where": at, "text": body})
+    before = state["units"].get(tag) if kind == "check" else None
     # A stale unit's brief carries what changed, so the re-check reads that.
-    changed = why_stale(root, defs, state, d.tag)["changes"] if before and \
+    changed = why_stale(root, defs, state, tag)["changes"] if before and \
         before["print"] != fp else None
-    return {"audit": name, "unit": d.tag, "changed": changed, "name": d.name, "where": f"{d.path}:{d.line}",
-            "text": d.text, "code": code, "before": before, "holder": me,
+    if kind == "draft":
+        hint = (f"Describe this code in the design, then run: cpo audit done {name} {tag} "
+                "--drafted, or --question \"<what a person must decide>\" --for <whom>")
+    elif kind == "lead":
+        hint = (f"Check the lead, then run: cpo audit done {name} {tag} --verified if "
+                "nothing is wrong, or --finding \"<what is wrong, and where>\", or "
+                "--question \"<what a person must decide>\" --for <whom>")
+    else:
+        hint = (f"Check each claim against the code, then run: cpo audit done {name} "
+                f"{tag} --verified, or --finding \"<what is wrong, and where>\", or "
+                "--question \"<what a person must decide>\" --for <whom>")
+    return {"audit": name, "kind": kind, "unit": tag, "changed": changed, "name": title,
+            "where": where, "text": text, "code": code, "before": before, "holder": me,
+            # A drafted section may be wrong where the code is right [CPO§W43].
+            "drafted": drafted.get(tag) if kind == "check" else None,
             # A file the brief already shows code from needs no pointer to it.
-            "pointers": [p for p in d.pointers if not any(
+            "pointers": [p for p in (what[0].pointers if kind == "check" else []) if not any(
                 c["where"].split(":", 1)[0] == p for c in code)],
             "until": now + CLAIM_SECONDS,
             "until_utc": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(now + CLAIM_SECONDS)),
             # The brief says what to do next, in JSON as on a terminal.
-            "next": f"Check each claim against the code, then run: cpo audit done {name} "
-                    f"{d.tag} --verified, or --finding \"<what is wrong, and where>\", or "
-                    "--question \"<what a person must decide>\" --for <whom>"}
+            "next": hint + f". Record anything else worth checking with: cpo audit note "
+                           f"{name} \"<what, and where>\""}
+
+
+# Implements [CPO§W41]
+def draft_text(root, defs, name, tag):
+    """What a drafting brief asks of the agent."""
+    heads = outline(defs, root)
+    out = ["No design claims this code. Describe it: add sections to a design doc that "
+           ".cpo declares, or extend them, saying what the code does now in claims a "
+           "reader could check, and naming each declaration in backticks. Mark plumbing "
+           "that serves no design with a `CPO§exempt: <why>` comment instead. Do not stop "
+           "to fix what looks wrong; note it and go on."]
+    if not docs.sources(root):
+        out.append("This repository declares no design doc yet. Start one beside the README, "
+                   "link it from there, and declare it in .cpo: [[source]] then "
+                   "doc = \"DESIGN.md\". Under its title, say that an agent drafted it from "
+                   "the code and nobody has signed it yet. `cpo help agent` shows the layout.")
+    if heads:
+        out.append("The design so far:\n" + "\n".join("  " + h for h in heads[:60])
+                   + ("\n  ..." if len(heads) > 60 else ""))
+    return "\n\n".join(out)
 
 
 # Implements [CPO§W10]
@@ -329,6 +607,13 @@ def record(root, store, defs, name, tag, status, note=None, to=None, at=None):
     it has changed since [CPO§W21]."""
     me, _ = agent()
     audit = Audit(store, name)
+    if tag.startswith("draft:"):
+        return record_draft(root, store, defs, name, tag, status, note, to)
+    if tag.startswith("lead-"):
+        return record_lead(root, store, name, tag, status, note, to)
+    if status == "drafted":
+        return {"error": f"{tag} is a unit to check, not code to draft; record it --verified, "
+                         "--finding, or --question"}
     fp, sha, err = print_at(root, defs, tag, at)
     if err:
         return {"error": err}
@@ -341,6 +626,94 @@ def record(root, store, defs, name, tag, status, note=None, to=None, at=None):
         audit.save(state)
     audit.log({"event": status, "unit": tag, "by": me, "note": note, "sha": sha})
     return {"audit": name, "unit": tag, "status": status, "sha": sha}
+
+
+def record_lead(root, store, name, tag, status, note, to):
+    """Close a lead: nothing wrong, a finding, or a question [CPO§W44]."""
+    me, _ = agent()
+    audit = Audit(store, name)
+    if status == "drafted":
+        return {"error": f"{tag} is a lead; record it --verified, --finding, or --question"}
+    with store.lock():
+        state = audit.load()
+        lead = state.get("leads", {}).get(tag)
+        if not lead:
+            return {"error": f"{name} has no {tag}"}
+        sha = head(root)
+        state["units"][tag] = {"status": status, "print": lead_print(lead), "sha": sha,
+                               "rules": RULES, "by": me or "unknown", "note": note, "for": to,
+                               "at": int(time.time())}
+        state["claims"].pop(tag, None)
+        audit.save(state)
+    audit.log({"event": status, "unit": tag, "by": me, "note": note, "sha": sha})
+    return {"audit": name, "unit": tag, "status": status, "sha": sha}
+
+
+# Implements [CPO§W41, CPO§W42]
+def record_draft(root, store, defs, name, tag, status, note, to):
+    """Close a unit of code to draft. Drafted, it must be claimed now by
+    the design or exempted, declaration by declaration; the sections that
+    claim it are recorded as the agent's, so another agent checks them."""
+    me, _ = agent()
+    audit = Audit(store, name)
+    if status not in ("drafted", "question"):
+        return {"error": f"{tag} is code to draft: describe it and record --drafted, or record "
+                         "--question; note what is wrong with cpo audit note"}
+    files = docs.tracked_files(root)
+    state = audit.load()
+    claim = state["claims"].get(tag)
+    everything = survey(root, defs, (), files)
+    pool = drafts(root, files, everything, docs.config(root).get("exclude", []))
+    if claim and claim.get("decls"):
+        wanted = [tuple(d) for d in claim["decls"]]
+    else:
+        match = [x for x in pool if x.tag == tag]
+        if not match:
+            return {"error": f"{tag} is not code to draft in {name}; run cpo audit mine {name}"}
+        wanted = [(match[0].path, a, b, n) for a, b, _, n in match[0].decls]
+    sha = head(root)
+    rec = {"status": status, "sha": sha, "rules": RULES, "by": me or "unknown", "note": note,
+           "for": to, "at": int(time.time())}
+    if status == "question":
+        match = [x for x in pool if x.tag == tag]
+        rec["print"] = match[0].print if match else None
+    else:
+        # Declarations are matched by name, since a comment added above one
+        # moves it; one without a name, by where it starts.
+        left = {(x.path, n or a) for x in pool for a, _, _, n in x.decls}
+        missing = [(p, a, n) for p, a, _, n in wanted if (p, n or a) in left]
+        if missing:
+            return {"error": f"{tag} is not drafted yet. Still claimed by no section: "
+                    + ", ".join(f"{n or 'the declaration'} ({p}:{a})" for p, a, n in missing)
+                    + ". Name each in backticks in a section of a declared design doc, mark "
+                      "it `CPO§exempt: <why>`, or record --question."}
+        names = {n for _, _, _, n in wanted if n}
+        paths = {p for p, _, _, _ in wanted}
+        sections = sorted({d.tag for d, regions, _ in everything for r in regions
+                           if r[0] in paths and covers_any(root, r, names)})
+        rec["sections"] = sections
+    with store.lock():
+        state = audit.load()
+        state["units"][tag] = rec
+        if status == "drafted":
+            for t in rec["sections"]:
+                state.setdefault("drafted", {}).setdefault(t, me or "unknown")
+        state["claims"].pop(tag, None)
+        audit.save(state)
+    audit.log({"event": status, "unit": tag, "by": me, "note": note, "sha": sha,
+               "sections": rec.get("sections")})
+    out = {"audit": name, "unit": tag, "status": status, "sha": sha}
+    if rec.get("sections"):
+        out["sections"] = rec["sections"]
+    return out
+
+
+def covers_any(root, region, names):
+    """Whether a region of code overlaps a declaration of one of these names."""
+    path, start, end = region
+    found = decls_of(root, path)
+    return bool(found) and any(n in names and (start or 1) <= b and a <= (end or b)
+                               for a, b, _, n, _ in found[0])
 
 
 @contextlib.contextmanager
@@ -577,31 +950,44 @@ def reprint(root, store, name):
     return sum(len(t) for t in old.values())
 
 
-# Implements [CPO§W13]
+# Implements [CPO§W13, CPO§W43]
 def status(root, store, defs, name, only_me=False):
     """Where an audit stands: each unit's standing, the verified share by
-    units and by the lines they claim, and what is open."""
+    units and by the lines they claim, what is open, the code left to
+    draft, the leads, and whether the draft is ready for a person."""
     me, _ = agent()
     reprint(root, store, name)
     state = Audit(store, name).load()
     now = int(time.time())
-    rows = []
-    for d, regions, fp in survey(root, defs):
-        st = standing(state, d.tag, fp, now)
-        claim = state["claims"].get(d.tag)
-        out = state["units"].get(d.tag) or {}
+    rows, drafting, leads = [], [], []
+    for kind, tag, fp, what in items(root, defs, state):
+        st = item_standing(state, kind, tag, fp, now)
+        claim = state["claims"].get(tag)
+        out = state["units"].get(tag) or {}
         if only_me and not ((claim and claim["holder"] == me and claim["until"] > now)
                             or (out.get("by") == me and st in ("finding", "question"))):
             continue
+        holder = claim["holder"] if st == "claimed" else None
+        note = (f"was a {out['status']}: {out['note']}" if st == "stale" else
+                out.get("note")) if out.get("status") in ("finding", "question") \
+            and out.get("note") else None
+        if kind == "draft":
+            drafting.append({"unit": tag, "name": what.name, "standing": st,
+                             "lines": sum(b - a + 1 for _, a, b in what.regions),
+                             "holder": holder, "note": note, "for": out.get("for")})
+            continue
+        if kind == "lead":
+            leads.append({"unit": tag, "name": what["text"][:160], "where": what.get("where"),
+                          "standing": st, "holder": holder, "note": note,
+                          "for": out.get("for")})
+            continue
+        d, regions, _ = what
         rows.append({"unit": d.tag, "name": d.name, "standing": st,
-                     "lines": lines_of(root, regions),
-                     "holder": claim["holder"] if st == "claimed" else None,
+                     "lines": lines_of(root, regions), "holder": holder,
                      # A finding stays visible while it is being fixed, when
                      # the edits that fix it make the unit stale.
-                     "note": (f"was a {out['status']}: {out['note']}" if st == "stale" else
-                              out.get("note")) if out.get("status") in ("finding", "question")
-                     and out.get("note") else None,
-                     "for": out.get("for")})
+                     "note": note, "for": out.get("for"),
+                     "drafted_by": state.get("drafted", {}).get(d.tag)})
     counts = {}
     for r in rows:
         counts[r["standing"]] = counts.get(r["standing"], 0) + 1
@@ -610,6 +996,15 @@ def status(root, store, defs, name, only_me=False):
         if counts.get("verified") else 0
     for r in rows:
         r["lines"] = len(r["lines"])
+    busy = ("open", "claimed", "stale")
+    # A draft is in order when all of it is drafted and checked, and every
+    # lead is closed [CPO§W43].
+    ready = bool(rows) and not only_me and not any(r["standing"] in busy for r in rows) and \
+        not any(r["standing"] in busy for r in drafting + leads)
     return {"audit": name, "units": len(rows), "counts": counts,
             "verified_units": counts.get("verified", 0),
-            "verified_lines": done, "lines": total, "rows": rows}
+            "verified_lines": done, "lines": total, "rows": rows,
+            "drafting": {"units": len(drafting), "lines": sum(r["lines"] for r in drafting),
+                         "rows": drafting},
+            "leads": {"open": sum(1 for r in leads if r["standing"] in busy), "rows": leads},
+            "drafts_first": state.get("drafts_first", True), "ready": ready}

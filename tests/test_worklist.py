@@ -18,7 +18,9 @@ def project(tmp_path, monkeypatch):
         "heading = '^##\\s+(?P<id>\\d+)\\.\\s'\ncite = 'D\\s*§\\s*(?P<id>\\d+)'\n")
     (repo / "src").mkdir()
     (repo / "src/ring.c").write_text("int ring_take(void) {\n  return 0;\n}\n")
-    (repo / "src/log.c").write_text("int log_append(void) {\n  return 1;\n}\n")
+    # Exempt, so the audit offers no code to draft before its units [CPO§W40].
+    (repo / "src/log.c").write_text("// CPO§exempt: a fixture's plumbing\n"
+                                    "int log_append(void) {\n  return 1;\n}\n")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "a"],
@@ -173,3 +175,99 @@ def test_short_unit_names_and_a_findings_note_while_it_is_fixed(tmp_path, monkey
     (repo / "src/ring.c").write_text("int ring_take(void) {\n  return -1;\n}\n")
     [row] = [r for r in worklist.status(repo, store, defs, "trial")["rows"] if r["unit"] == "D§1"]
     assert row["standing"] == "stale" and row["note"] == "was a finding: refuses nothing"
+
+
+def bare(tmp_path, monkeypatch):
+    """A repository with code and no design."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "README.md").write_text("# Top\n")
+    (repo / "src/ring.c").write_text(
+        "int ring_take(void) {\n  return 0;\n}\n\n"
+        "int ring_put(int x) {\n  /* This can never be negative. */\n  return x;\n}\n")
+    (repo / "src/glue.c").write_text("int glue(void) {\n  return 2;\n}\n")
+    (repo / "tests").mkdir()
+    (repo / "tests/test_ring.c").write_text("int test_ring(void) {\n  return 0;\n}\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "a"],
+                   cwd=repo, check=True)
+    return repo, Store(repo)
+
+
+def load(repo):
+    worklist._decls.clear()
+    return docs.load(root=repo)[1]
+
+
+def test_code_no_design_claims_is_drafted_before_anything_is_checked(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    brief = worklist.next_unit(repo, store, load(repo), "boot")
+    assert brief["kind"] == "draft" and brief["unit"].startswith("draft:src/")
+    assert "declares no design doc yet" in brief["text"], "the first brief says to start one"
+    tags = {r["unit"] for r in worklist.status(repo, store, load(repo), "boot")["drafting"]["rows"]}
+    assert tags == {"draft:src/glue.c:glue", "draft:src/ring.c:ring_take"}, \
+        "a file's declarations make one unit, and tests are not drafted"
+
+
+def test_drafted_needs_every_declaration_described_or_exempted(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    brief = worklist.next_unit(repo, store, load(repo), "boot", scope=["src/ring.c"])
+    assert brief["unit"] == "draft:src/ring.c:ring_take"
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n')
+    (repo / "DESIGN.md").write_text("# Design\n\n## 1. The ring\n\n`ring_take` refuses.\n")
+    out = worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
+    assert "no section: ring_put (src/ring.c:5)." in out["error"]
+    (repo / "DESIGN.md").write_text(
+        "# Design\n\n## 1. The ring\n\n`ring_take` refuses; `ring_put` stores.\n")
+    out = worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
+    assert out["status"] == "drafted" and out["sections"] == ["DESIGN§1"]
+
+
+def test_the_drafter_does_not_check_its_own_section(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    (repo / "src/glue.c").write_text("// CPO§exempt: plumbing\nint glue(void) {\n  return 2;\n}\n")
+    brief = worklist.next_unit(repo, store, load(repo), "boot")
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n')
+    (repo / "DESIGN.md").write_text(
+        "# Design\n\n## 1. The ring\n\n`ring_take` refuses; `ring_put` stores.\n")
+    worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
+    for lead in worklist.status(repo, store, load(repo), "boot")["leads"]["rows"]:
+        worklist.record(repo, store, load(repo), "boot", lead["unit"], "verified")
+    mine = worklist.next_unit(repo, store, load(repo), "boot")
+    assert mine.get("done") and "DESIGN§1" in mine["message"] and "CPO_AGENT" in mine["message"]
+    monkeypatch.setenv("CPO_AGENT", "a2")
+    theirs = worklist.next_unit(repo, store, load(repo), "boot")
+    assert theirs["unit"] == "DESIGN§1" and theirs["drafted"] == "a1"
+    worklist.record(repo, store, load(repo), "boot", "DESIGN§1", "verified")
+    assert worklist.status(repo, store, load(repo), "boot")["ready"], \
+        "drafted whole, checked by a second agent, and no lead open: ready for a person"
+
+
+def test_leads_start_from_unbacked_claims_and_agents_add_more(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    worklist.next_unit(repo, store, load(repo), "boot")
+    leads = worklist.status(repo, store, load(repo), "boot")["leads"]
+    assert leads["open"] == 1 and leads["rows"][0]["where"] == "src/ring.c:6"
+    audit = worklist.Audit(store, "boot")
+    state = audit.load()
+    tag = worklist.add_lead(state, "ring_put never checks x", "src/ring.c:5", "a1")
+    assert worklist.add_lead(state, "ring_put never checks x", "src/ring.c:5") == tag
+    audit.save(state)
+    out = worklist.record(repo, store, load(repo), "boot", tag, "finding", "x may be negative")
+    assert out["status"] == "finding"
+    rows = worklist.status(repo, store, load(repo), "boot")["leads"]["rows"]
+    assert [r["standing"] for r in rows] == ["open", "finding"]
+
+
+def test_an_audit_begun_on_a_design_checks_before_it_drafts(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    (repo / "src/extra.c").write_text("int extra(void) {\n  return 3;\n}\n")
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    assert worklist.next_unit(repo, store, load(repo), "trial")["unit"] == "D§1"
+    assert worklist.status(repo, store, load(repo), "trial")["drafting"]["units"] == 1

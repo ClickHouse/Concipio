@@ -40,10 +40,11 @@ its original text.
 ## What Concipio finds in it
 
 - **CPO§D6:** Sections are headings, numbered ones defining tags as a
-  source's pattern says [T39]. A statement is a list item whose first
-  line opens with its bold tag, and it extends over the item, nested
-  lists included. Citations and references are found in prose only,
-  never in code.
+  source's pattern says [T39]. A statement is a list item or a
+  paragraph whose first line opens with its bold tag. An item's
+  statement extends over the item, nested lists included, up to the
+  first nested statement, which is its child [T38]. Citations and
+  references are found in prose only, never in code.
 - **CPO§D7:** Fields are attribute lists in a heading, a paragraph, or
   an item's first paragraph, still parsed by Python-Markdown's
   `attr_list` [F1], since the grammar has no node for them. The model

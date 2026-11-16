@@ -1,4 +1,7 @@
 import difflib
+import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -125,3 +128,67 @@ def test_splices_refuse_overlap_and_a_changed_file():
     with pytest.raises(m.SpliceError):
         m.apply(doc.text, [m.Splice(0, 1, "x")], current=doc.text + b"edited")
     assert m.apply(doc.text, []) == doc.text
+
+
+CORPUS = Path(__file__).parent / "corpus"
+
+
+def summary(doc):
+    """What the model makes of a doc, as plain data, for comparing across
+    versions of the grammar [CPO§D12]."""
+    def one(n):
+        out = {"kind": n.kind, "lines": [n.line, n.last]}
+        if n.kind == "section":
+            out["level"], out["title"] = n.level, n.title
+        if n.kind == "item":
+            out["marker"], out["indent"] = n.marker, n.indent
+        if n.inline:
+            out["inline"] = [[i.kind, i.line] + ([i.fields] if i.fields else []) for i in n.inline]
+        kids = [one(c) for c in n.children if c.kind != "heading" or n.kind != "section"]
+        if kids:
+            out["children"] = kids
+        return out
+    return [one(c) for c in doc.root.children]
+
+
+def test_the_corpus_reads_as_recorded():
+    """A new grammar version that moves anything shows here, as a diff to
+    judge, before it ships. CPO_RECORD_CORPUS=1 records what it reads."""
+    for doc in sorted(CORPUS.glob("*.txt")):
+        got = summary(m.parse(doc.read_text()))
+        want = doc.with_suffix(".model.json")
+        if os.environ.get("CPO_RECORD_CORPUS"):
+            want.write_text(json.dumps(got, indent=1) + "\n")
+        assert got == json.loads(want.read_text()), f"{doc.name} reads differently"
+
+
+def test_code_blocks_of_every_kind_hide_tags_and_headings():
+    from concipio import docs
+    text = (CORPUS / "awkward.txt").read_text()
+    prose = dict(docs.prose_lines(text))
+    assert prose[23] == "" and prose[28] == "", "indented and fenced code are code"
+    titles = [h[2] for h in docs.headings(text)]
+    assert titles == ["Awkward Markdown", "1. Lists", "2. Code", "Underlined section",
+                      "Top underlined"]
+
+
+def test_a_wrapped_underlined_title_leaves_its_underline_out_of_the_text(tmp_path):
+    from concipio import docs
+    (tmp_path / "DESIGN.md").write_text("§1 The ring,\nwrapped\n---------\n\nRefuses when full.\n")
+    src = {"doc": "DESIGN.md", "prefix": "D", "heading": docs.NUMBERED}
+    defs, errors = {}, []
+    docs.heading_definitions(tmp_path, src, defs, errors)
+    assert defs["D§1"].text == "Refuses when full."
+
+
+def test_setting_a_field_after_a_non_ascii_value_lands_in_place():
+    doc = m.parse('# T\n{Signed="José 2026-11-16T21:03:07Z" Sig="ssh:old"}\n\nText.\n')
+    section = next(doc.walk({"section"}))
+    out = m.apply(doc.text, [m.set_field(doc, section, "Sig", "ssh:new")]).decode()
+    assert '{Signed="José 2026-11-16T21:03:07Z" Sig="ssh:new"}' in out
+
+
+def test_spaces_around_equals_make_prose_not_a_field():
+    doc = m.parse("Text {Signed = 'Josh'} and {Owner=Josh}.\n")
+    assert [a.fields for a in doc.walk({"attrs"})] == [{"Owner": "Josh"}], \
+        "as Python-Markdown and Pandoc read attribute lists"

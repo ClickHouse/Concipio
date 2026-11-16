@@ -1,0 +1,46 @@
+# Awkward Markdown
+
+{Owner=Josh}
+
+## 1. Lists
+
+- **EX§1:** A statement whose item holds a code block:
+
+  ```toml
+  # a comment, not a heading
+  key = "value"
+  ```
+
+  and text after it.
+  - **EX§2:** A nested statement, its child.
+- **EX§3:** A statement with lazy lines,
+which CommonMark keeps in the item.
+1. A numbered item
+2. Another, with `code {Owner=nobody}` and a field {Importance=critical}
+
+## 2. Code
+
+    an indented code block
+    with § and [a link](nowhere.md)
+
+````markdown
+## not a heading
+```
+````
+
+<div>
+## inside HTML
+</div>
+
+Underlined section
+------------------
+
+A paragraph under it.
+
+> ## quoted
+> - **EX§4:** A statement in a quote.
+
+Top underlined
+==============
+
+The end.

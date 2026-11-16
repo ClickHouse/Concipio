@@ -202,14 +202,16 @@ def convert(ts, data, errors):
         n = node("item", ts, data,
                  marker=data[marker.start_byte:marker.end_byte].decode().strip() if marker else "",
                  indent=marker.start_point[1] if marker else ts.start_point[1])
-        n.children = [convert(c, data, errors) for c in ts.children
+        n.children = [convert(c, data, errors) for c in top_level(ts, errors)
                       if c.type not in ("block_continuation",) and not c.type.startswith(
                           ("list_marker", "task_list_marker"))]
         n.children = [c for c in n.children if c is not None]
         return n
     if t == "block_quote":
         n = node("quote", ts, data)
-        n.children = [x for x in (convert(c, data, errors) for c in ts.children
+        # Inside a quote, the grammar wraps a heading in a section of its
+        # own; the model keeps the heading as a block of the quote.
+        n.children = [x for x in (convert(c, data, errors) for c in top_level(ts, errors)
                                   if c.type not in ("block_quote_marker", "block_continuation"))
                       if x is not None]
         return n
@@ -327,7 +329,7 @@ def attr_fields(body):
         return None
     fields = {}
     for k, v in pairs:
-        if re.search(rf"(?<![\w.#-]){re.escape(k)}\s*=", body):
+        if re.search(rf"(?<![\w.#-]){re.escape(k)}=", body):
             fields[k] = v
         elif k == "." or f"#{k}" in body:
             continue
@@ -433,8 +435,10 @@ def set_field(doc, n, key, value):
     value = quote(value)
     attrs = own_attrs(doc, n)
     if attrs is not None:
-        text = doc.text[attrs.start:attrs.end].decode()
-        m = re.search(FIELD_AT.format(key=re.escape(key)), text)
+        # Offsets are bytes, so the field is found in the bytes, not in
+        # text whose characters may each be several bytes.
+        text = doc.text[attrs.start:attrs.end]
+        m = re.search(FIELD_AT.format(key=re.escape(key)).encode(), text)
         if m:
             return Splice(attrs.start + m.start(1), attrs.start + m.end(1), value)
         return Splice(attrs.end - 1, attrs.end - 1, f" {key}={value}")

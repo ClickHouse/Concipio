@@ -818,6 +818,7 @@ def audit_at(repo, args, defs=None):
                 if r["measured"] and not r["test"]]
         n = sum(r["lines"] for r in rows)
         result["coverage"][key] = 100 * sum(r["covered"] for r in rows) / n if n else 0.0
+        result["coverage"]["lines"] = n
         if key == "any":
             result["coverage"]["claimed"] = 100 * sum(r["claimed"] for r in rows) / n \
                 if n else 0.0
@@ -1017,7 +1018,9 @@ def cmd_status(args, defs, repo):
                             if claimed > cited else "") + ".")
     out = (["In progress:"] + lines + [""] if lines else ["Nothing in progress."]) + score
     nxt = None
-    if claimed == 0 and not flight["audits"]:
+    # Only code a parser reads can be drafted; a repository of docs alone
+    # has none.
+    if claimed == 0 and data["coverage"].get("lines") and not flight["audits"]:
         # Undocumented code matters more than the docs' score [CPO§W45].
         nxt = ("No design claims any of this code. Draft one with an audit: cpo audit next "
                f"{time.strftime('%Y-%m-%d')}. It hands out the code, a file's declarations at a "

@@ -599,8 +599,10 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
             if not state["units"]:
                 seed_leads(root, defs, state, files)
             state["seeded"] = True
-            found += lead_items(state, scope, defs,
-                                scoped_lines(root, found) if scope else frozenset())
+            # Seeding adds leads; the list is rebuilt, so a lead noted before
+            # is not listed twice.
+            found = [i for i in found if i[0] != "lead"] + lead_items(
+                state, scope, defs, scoped_lines(root, found) if scope else frozenset())
         drafted = state.get("drafted", {})
         mine = {t for t, c in state["claims"].items() if c["holder"] == me and c["until"] > now}
         st = {i[1]: item_standing(state, i[0], i[1], i[2], now) for i in found}
@@ -630,7 +632,8 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
         kind, tag, fp, what = pick
         claim = {"holder": me, "contact": contact(), "at": now, "until": now + CLAIM_SECONDS}
         if kind == "draft":
-            claim["decls"] = [[what.path, a, b, n] for a, b, _, n in what.decls]
+            claim["decls"] = [[what.path, a, b, n, first_line(root, what.path, a)]
+                              for a, b, _, n in what.decls]
         state["claims"][tag] = claim
         audit.save(state)
     audit.log({"event": "claim", "unit": tag, "by": me})
@@ -768,12 +771,14 @@ def record_draft(root, store, defs, name, tag, status, note, to):
     everything = survey(root, defs, (), files)
     pool = drafts(root, files, everything, docs.config(root).get("exclude", []))
     if claim and claim.get("decls"):
-        wanted = [tuple(d) for d in claim["decls"]]
+        wanted = [tuple(d[:4]) + (d[4] if len(d) > 4 else first_line(root, d[0], d[1]),)
+                  for d in claim["decls"]]
     else:
         match = [x for x in pool if x.tag == tag]
         if not match:
             return {"error": f"{tag} is not code to draft in {name}; run cpo audit mine {name}"}
-        wanted = [(match[0].path, a, b, n) for a, b, _, n in match[0].decls]
+        wanted = [(match[0].path, a, b, n, first_line(root, match[0].path, a))
+                  for a, b, _, n in match[0].decls]
     sha = head(root)
     rec = {"status": status, "sha": sha, "rules": RULES, "by": me or "unknown", "note": note,
            "for": to, "at": int(time.time())}
@@ -782,16 +787,17 @@ def record_draft(root, store, defs, name, tag, status, note, to):
         rec["print"] = match[0].print if match else None
     else:
         # Declarations are matched by name, since a comment added above one
-        # moves it; one without a name, by where it starts.
-        left = {(x.path, n or a) for x in pool for a, _, _, n in x.decls}
-        missing = [(p, a, n) for p, a, _, n in wanted if (p, n or a) in left]
+        # moves it; one without a name, by the text of its first line.
+        left = {(x.path, k) for x in pool for a, _, _, n in x.decls
+                for k in (n, first_line(root, x.path, a)) if k}
+        missing = [(p, a, n) for p, a, _, n, first in wanted if (p, n or first) in left]
         if missing:
             return {"error": f"{tag} is not drafted yet. Still claimed by no section: "
                     + ", ".join(f"{n or 'the declaration'} ({p}:{a})" for p, a, n in missing)
                     + ". Name each in backticks in a section of a declared design doc, mark "
                       "it `CPO§exempt: <why>`, or record --question."}
-        names = {n for _, _, _, n in wanted if n}
-        paths = {p for p, _, _, _ in wanted}
+        names = {w[3] for w in wanted if w[3]}
+        paths = {w[0] for w in wanted}
         sections = sorted({d.tag for d, regions, _ in everything for r in regions
                            if r[0] in paths and covers_any(root, r, names)})
         rec["sections"] = sections
@@ -809,6 +815,13 @@ def record_draft(root, store, defs, name, tag, status, note, to):
     if rec.get("sections"):
         out["sections"] = rec["sections"]
     return out
+
+
+def first_line(root, path, line):
+    """A line of a file, stripped, by which a declaration without a name is
+    known wherever it moves."""
+    lines = (lines_in(root, path) or "").splitlines()
+    return lines[line - 1].strip() if 0 < line <= len(lines) else ""
 
 
 def covers_any(root, region, names):
@@ -901,11 +914,11 @@ def span_of(root, d):
     line before the next heading, or a statement's own lines."""
     if not d.heading:
         return d.line, d.line + d.lines - 1
-    lines = (root / d.path).read_text(errors="replace").splitlines()
-    for n, line in docs.prose_lines("\n".join(lines)):
-        if n > d.line and docs.HEADING.match(line):
+    text = (root / d.path).read_text(errors="replace")
+    for n, _, _, _ in docs.headings(text):
+        if n > d.line:
             return d.line, n - 1
-    return d.line, len(lines)
+    return d.line, len(text.splitlines())
 
 
 SENTENCE = re.compile(r"(?<=[.;:!?])\s+(?=\S)|\n+")

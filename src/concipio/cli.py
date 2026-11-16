@@ -292,6 +292,13 @@ def build_parser():
     wy = add("why", "explain why a line of code exists")
     wy.add_argument("target", help="path:line")
     wy.add_argument("--at", default="HEAD", help="the commit to read the file at (default HEAD)")
+    sg = sub.add_parser("sign", parents=[common],
+                        help="review what changed since you last signed, and sign it")
+    sg.add_argument("targets", nargs="*",
+                    help="docs or tags; by default the master and every doc defining tags")
+    sg.add_argument("--sections", action="store_true", help="sign each section, not each doc")
+    sg.add_argument("--list", action="store_true",
+                    help="list what awaits signing, without asking anything")
     sub.add_parser("lsp", help="run a language server on stdio for editors")
     add("migrate", "convert a store that filed decisions by review into records")
     hp = sub.add_parser("help", help="print guidance").add_subparsers(dest="sub", required=True)
@@ -347,6 +354,8 @@ def dispatch(args):
         status = cmd_config(args, defs, repo)
     elif args.command == "status":
         status = cmd_status(args, defs, repo)
+    elif args.command == "sign":
+        status = cmd_sign(args, defs, repo)
     elif args.command == "audit" and args.action:
         status = cmd_worklist(args, defs, repo)
     elif args.command == "audit":
@@ -1028,6 +1037,115 @@ def cmd_status(args, defs, repo):
         out = [nxt, ""] + out
     emit({"in_progress": flight, "next": nxt, **data}, "\n".join(out), args.json)
     return status
+
+
+AWAITING = ("unsigned", "stale", "invalid", "unproven")
+
+
+def sign_targets(args, defs, repo):
+    """What the person asked to sign: docs, or tags naming sections; by
+    default every doc a person signs, from the master down [CPO§W20]."""
+    from . import doc_model, signing, worklist
+    wanted = args.targets or signing.signable_docs(repo, defs)
+    out = []
+    for w in wanted:
+        tag = worklist.unit_name(defs, w) if not (repo / w).is_file() else None
+        path = defs[tag].path if tag in defs else w
+        if not (repo / path).is_file():
+            raise SystemExit(f"cpo sign: {w} is neither a doc nor a tag")
+        doc = doc_model.parse((repo / path).read_bytes())
+        ts = signing.targets(path, doc, sections=args.sections or tag is not None)
+        if tag in defs:
+            if not defs[tag].heading:
+                raise SystemExit(f"cpo sign: {tag} is a statement, not a section; sign the "
+                                 f"section that holds it, or its doc, {path}")
+            # A tag on the doc's title signs the doc.
+            ts = [t for t in ts if t.section.line == defs[tag].line]
+        out += [(path, doc, t) for t in ts]
+    return out
+
+
+# Implements [CPO§W50]
+def cmd_sign(args, defs, repo):
+    import difflib
+    import sys
+    from . import doc_model, signing
+    require = docs.config(repo).get("signing", {}).get("require")
+    rows = []
+    for path, doc, t in sign_targets(args, defs, repo):
+        st = signing.standing(repo, path, doc, t, require)
+        fields, _ = signing.fields_of(doc, t)
+        rows.append({"path": path, "kind": t.kind, "title": t.title, "line": t.section.line,
+                     "standing": st, "signed": fields.get(signing.SIGNED), "target": t,
+                     "doc": doc})
+    waiting = [r for r in rows if r["standing"] in AWAITING]
+    if args.list or args.json:
+        lines = [f"{len(waiting)} of {len(rows)} await signing."]
+        lines += [f"  {r['standing']:9} {r['path']}:{r['line']} {r['title']}"
+                  + (f" (signed {r['signed']})" if r["signed"] else "") for r in waiting]
+        emit([{k: v for k, v in r.items() if k not in ("target", "doc")} for r in rows],
+             "\n".join(lines), args.json)
+        return 0
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise SystemExit("cpo sign asks a person at a terminal, so it does not run without "
+                         "one. cpo sign --list shows what awaits signing.")
+    if not waiting:
+        print(f"Nothing awaits your signature: {len(rows)} signed and current.")
+        return 0
+    name, key = signing.signer_name(repo), signing.signing_key(repo)
+    if not name:
+        raise SystemExit("cpo sign needs your name: set [signing] name in .cpo, or git's "
+                         "user.name.")
+    if require and not key:
+        raise SystemExit("This project requires signatures to be proven, and git has no "
+                         "user.signingkey to sign with.")
+    if not key:
+        print("No signing key in git's user.signingkey: signatures will carry no Sig.\n")
+    for r in waiting:
+        t, doc = r["target"], r["doc"]
+        what = "the doc" if t.kind == "doc" else f'section "{t.title}"'
+        print(f"=== {r['path']}:{r['line']}, {what}: {r['standing']}"
+              + (f", signed {r['signed']}" if r["signed"] else ""))
+        now = signing.covered(doc, t, own_signed=False).decode()
+        then = signing.before(repo, r["path"], doc, t, display=True)
+        if then is None:
+            print(now)
+        elif then.decode() == now:
+            print("(The text is unchanged since it was signed; the signature itself needs "
+                  "renewing.)")
+        else:
+            sys.stdout.writelines(difflib.unified_diff(
+                then.decode().splitlines(True), now.splitlines(True),
+                "as signed", "now"))
+        try:
+            answer = input("\nSign this? [y]es, [n]o, [d]irective, [q]uit: ").strip().lower()
+        except EOFError:
+            print()
+            break
+        if answer.startswith("q"):
+            break
+        if answer.startswith("d"):
+            try:
+                text = input("Directive: ").strip()
+            except EOFError:
+                break
+            if text:
+                try:
+                    signing.directive(repo, r["path"], t, text)
+                    print("Directive left.\n")
+                except (signing.SigningError, doc_model.SpliceError) as e:
+                    print(f"No directive left: {e}\n")
+            continue
+        if not answer.startswith("y"):
+            print("Skipped.\n")
+            continue
+        try:
+            signed = signing.sign(repo, r["path"], t, name, key)
+        except (signing.SigningError, doc_model.SpliceError) as e:
+            print(f"Not signed: {e}\n")
+            continue
+        print(f"Signed: {signed}.\n")
+    return 0
 
 
 def cmd_path(args, defs, repo):

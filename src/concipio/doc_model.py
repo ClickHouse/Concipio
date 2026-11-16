@@ -391,8 +391,8 @@ def quote(value):
 # Implements [CPO§D7, CPO§D9]
 def own_attrs(doc, n):
     """The attribute list that holds an element's fields: a heading's own,
-    or one alone on the line under it; an item's, in its first paragraph;
-    a paragraph's own."""
+    or one alone in the paragraph that opens its section; an item's, in its
+    first paragraph; a paragraph's own."""
     if n.kind == "section":
         n = n.heading
     if n.kind == "heading":
@@ -400,7 +400,7 @@ def own_attrs(doc, n):
         if found:
             return found[0]
         after = next_block(doc, n)
-        if after is not None and after.kind == "paragraph" and after.line == n.last + 1:
+        if after is not None and after.kind == "paragraph":
             body = doc.slice(after).strip()
             only = [a for a in after.inline if a.kind == "attrs"]
             if len(only) == 1 and doc.slice(only[0]).strip() == body:

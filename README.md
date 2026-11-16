@@ -509,6 +509,9 @@ This list is for readers; under [M20], Concipio will generate it.
   design's structure [M25, M51, R13]
 - [Kinds of design point](docs/design/kinds.md), a proposal for
   mechanisms, libraries, and to-do points, each with its own rules
+- [Reading and editing docs](docs/design/markdown.md), a proposal for a
+  model of a doc built by tree-sitter, and for changing docs only by
+  splices into their text
 
 Planned:
 

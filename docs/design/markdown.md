@@ -68,7 +68,9 @@ its original text.
   section's range, with line endings as `\n`, trailing whitespace
   removed, and the value of every signature field in the range removed,
   nested sections' included. A sub-section signed later then leaves its
-  parent's signature valid while its text is unchanged.
+  parent's signature valid while its text is unchanged. The range
+  depends on headings alone, never on where a list or block ends, since
+  headings are what grammars agree on most.
 
 ## Switching readers
 
@@ -79,3 +81,16 @@ its original text.
   such as underlined headings, four-backtick fences, and statements in
   block quotes; each difference is listed and judged. The grammar is a
   new dependency, so the tool must be installed again.
+- **CPO§D12:** The grammar is not Concipio's, and it departs from
+  CommonMark in rare cases, such as lazy continuation lines in nested
+  lists. A new version may move where a list item or a block ends, and
+  so change a statement's text and the fingerprints audits record.
+  Concipio pins the grammar's version, and keeps a corpus of its own
+  docs and awkward cases whose model a test compares, so an upgrade
+  shows what it moves before it ships. Signatures are safe from this as
+  long as heading boundaries hold [D10]. Where the grammar and CommonMark
+  disagree, Concipio works around the gap in the backend [D5] until a
+  parser that edits Markdown in place, as ruamel edits YAML, exists to
+  replace it. A change that cannot keep old fingerprints is disruptive
+  for the audits that recorded them, not fatal: they go stale and are
+  checked again.

@@ -39,11 +39,16 @@ Run these in any repository. None writes a file.
 
 Give your agent this, adjusted to your repository:
 
-> Run `cpo help agent` and follow its section on adopting Concipio. Start
-> with the design for `<the part you care about>`, and tell me what you
-> find.
+> Run `cpo help agent` and follow its section on adopting Concipio. Take
+> the whole codebase through the audit, and tell me when the draft is in
+> order or you need a decision from me.
 
-`cpo help agent` is the agent's whole manual: how to declare or write a
+To start smaller, name a directory instead of the whole codebase. With no
+design to start from, the agent drafts one first: the audit hands it the
+code no design describes, a file's declarations at a time, then has other
+agents check each section it wrote, and keeps every lead it notices.
+
+`cpo help agent` is the agent's whole manual: how to declare or draft a
 design, audit it section by section, record what it finds, and cite it
 from the code. It opens:
 
@@ -54,8 +59,9 @@ from the code. It opens:
 ## Read what it found
 
 - `cpo status` shows the work in progress first, then the score.
-- `cpo audit status <name>` shows an audit: each section verified,
-  stale, a finding, or a question for a person.
+- `cpo audit status <name>` shows an audit: the code left to draft, each
+  section verified, stale, a finding, or a question for a person, and
+  the open leads. It says when the draft is ready for you.
 - `cpo audit why <name> <section>` shows what changed in a section since
   it was checked, as a diff.
 

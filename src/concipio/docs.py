@@ -124,22 +124,57 @@ def site_pages(root, files):
 
 
 # Implements [CPO§T20]
+# Implements [CPO§D6, CPO§D11]
 def prose_lines(text):
     """Yield (line number, line) for Markdown outside code, with inline
-    code spans blanked so tags inside them are ignored."""
-    fence = None
+    code spans blanked so tags inside them are ignored. Code blocks, fenced
+    or indented, are what the doc model says they are [D2]."""
+    code = model(text).code_lines()
     for n, line in enumerate(text.splitlines(), 1):
-        stripped = line.lstrip()
-        if fence:
-            if stripped.startswith(fence):
-                fence = None
+        if n in code:
             yield n, ""
-            continue
-        if stripped.startswith(("```", "~~~")):
-            fence = stripped[:3]
-            yield n, ""
-            continue
-        yield n, re.sub(r"`[^`]*`", lambda m: " " * len(m.group(0)), line)
+        else:
+            yield n, re.sub(r"`[^`]*`", lambda m: " " * len(m.group(0)), line)
+
+
+_models = {}
+
+
+def model(text):
+    """The doc model of a text, parsed once however many readers ask. A
+    command reads every doc several times over, so every doc it has read
+    is kept, up to far more docs than a project has."""
+    from . import doc_model
+    key = hash(text)
+    hit = _models.get(key)
+    if hit is None or hit[0] != text:
+        if len(_models) > 20000:
+            _models.clear()
+        hit = _models[key] = (text, doc_model.parse(text))
+    return hit[1]
+
+
+def heading_ends(text):
+    """Each section heading's last line, by its first: an underlined
+    heading ends at its underline, however many lines its title wraps."""
+    return {s.heading.line: s.heading.last for s in model(text).walk({"section"})}
+
+
+# Implements [CPO§D6]
+def headings(text):
+    """A doc's section headings, as (line, level, title, line as written),
+    from the doc model: underlined headings included, and none inside
+    code, a list, or a quote. An underlined heading is written out as a
+    `#` heading would be, so the patterns that read numbers apply."""
+    lines = text.splitlines()
+    out = []
+    for s in model(text).walk({"section"}):
+        h = s.heading
+        raw = lines[h.line - 1] if h.line <= len(lines) else ""
+        if not raw.lstrip().startswith("#"):
+            raw = "#" * h.level + " " + h.title
+        out.append((h.line, h.level, h.title, raw))
+    return out
 
 
 # Implements [CPO§T4]
@@ -170,7 +205,7 @@ def attribute_fields(line):
             continue
         fields, words = {}, False
         for k, v in pairs:
-            if re.search(rf"(?<![\w.#-]){re.escape(k)}\s*=", body):
+            if re.search(rf"(?<![\w.#-]){re.escape(k)}=", body):
                 fields[k] = v
             elif k == "." or f"#{k}" in body:
                 continue  # a class or an id, which attribute lists also carry
@@ -225,6 +260,28 @@ def statement_fields(lines, pattern=None):
     return fields, kept
 
 
+# Implements [CPO§D6]
+def statement_lines(text, lines, start):
+    """The lines of the statement whose tag opens line index `start`, from
+    the doc model: its list item, nested lists included, up to the first
+    nested item that opens a statement of its own [T38]; or its paragraph.
+    None if the model holds no item or paragraph starting there."""
+    doc = model(text)
+    at = start + 1
+    item = next((n for n in doc.walk({"item"}) if n.line == at), None)
+    if item is not None:
+        last = item.last
+        for sub in item.walk({"item"}):
+            if sub is not item and sub.line > at and DEFINITION.match(lines[sub.line - 1]):
+                last = sub.line - 1
+                break
+        while last > at and not lines[last - 1].strip():
+            last -= 1
+        return lines[start:last]
+    para = next((n for n in doc.walk({"paragraph"}) if n.line == at), None)
+    return lines[start:para.last] if para is not None else None
+
+
 def statement_extent(lines, start, indent, is_item):
     """Return the lines of the statement that begins at index `start`: its
     paragraph, or its list item up to the first nested definition, which
@@ -272,8 +329,9 @@ def find_definitions(root, files, pattern=None):
     for path in files:
         if not is_doc(path):
             continue
-        raw = (root / path).read_text(errors="replace").splitlines()
-        prose = [line for _, line in prose_lines("\n".join(raw))]
+        source = (root / path).read_text(errors="replace")
+        raw = source.splitlines()
+        prose = [line for _, line in prose_lines(source)]
         open_items = []  # (indent, tag) of enclosing list-item definitions
         for i, line in enumerate(prose):
             m = DEFINITION.match(line)
@@ -282,7 +340,8 @@ def find_definitions(root, files, pattern=None):
                     open_items.clear()
                 continue
             tag = f"{m['prefix']}§{m['id']}"
-            body = statement_extent(raw, i, len(m["indent"]), bool(m["marker"]))
+            body = statement_lines(source, raw, i) or \
+                statement_extent(raw, i, len(m["indent"]), bool(m["marker"]))
             fields, kept = statement_fields(body, pattern)
             text = " ".join(l.strip() for l in kept if l.strip())
             text = re.sub(r"^(?:[-*]|\d+\.)\s+", "", text)
@@ -384,7 +443,7 @@ def numbered_headings(text):
     """A doc's numbered sections, {number: line}, found in any Markdown doc
     without configuration."""
     out = {}
-    for n, line in prose_lines(text):
+    for n, _, _, line in headings(text):
         m = NUMBERED.match(line)
         if m and m["id"] not in out:
             out[m["id"]] = n
@@ -449,18 +508,21 @@ def heading_definitions(root, src, defs, errors, pattern=None):
         errors.append(f"{path}, declared in .cpo, does not exist")
         return
     raw = text.splitlines()
-    prose = [line for _, line in prose_lines(text)]
-    heads = [(i, len(m[1]), m[2]) for i, line in enumerate(prose) if (m := HEADING.match(line))]
+    heads = [(n - 1, level, title, line) for n, level, title, line in headings(text)]
     stack = []
-    for k, (i, level, title) in enumerate(heads):
+    for k, (i, level, title, line) in enumerate(heads):
         while stack and stack[-1][0] >= level:
             stack.pop()
-        m = src["heading"].match(raw[i])
+        m = src["heading"].match(line)
         if not m:
             continue
         tag = f"{src['prefix']}§{m['id']}"
         end = heads[k + 1][0] if k + 1 < len(heads) else len(raw)
-        fields, kept = statement_fields(raw[i:end], pattern)
+        # An underlined heading's title lines and underline are not its
+        # section's text; the model knows where the heading ends.
+        own = [line] + raw[heading_ends(text).get(i + 1, i + 2):end] if line != raw[i] \
+            else raw[i:end]
+        fields, kept = statement_fields(own, pattern)
         heading_line = kept[0] if kept else raw[i]
         body = [l for l in kept[1:] if l.strip()]
         name = re.sub(r"^#+\s*§?" + re.escape(m["id"]) + r"\.?\s*", "", heading_line).strip()

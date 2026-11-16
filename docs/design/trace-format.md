@@ -436,29 +436,29 @@ code from outside it.
 
 - **CPO§T17:** `.cpo` is optional. It sits at the repository root, or, for
   a project that has not adopted Concipio, in the store [T18], where only
-  its user sees it. It is TOML, and every key has a default:
-
-  ```toml
-  master = "README.md"
-  design_root = "."
-  anchors = "cpo/anchors"
-  exclude = []
-
-  [roles]
-  definition = '^\s*(?:[-*]\s+)?\*\*${TAG}(?::\*\*|\*\*:)'
-  implementation = 'Implements \[${TAG}\]'
-  test = 'Tests \[${TAG}\]'
-
-  [lint]
-  # bare-tag-without-note = "warn"
-
-  [foreign]
-  # DRV = "vendor/driver"
-  ```
-
+  its user sees it. It is TOML, and every key has a default [T78].
   `design_root` is the base for the relative paths that ratification signs
   [M25]. Moving the whole doc set means changing one line here. A tag matched
   by no role pattern is a reference.
+  - **CPO§T78:** The defaults, as `.cpo` would spell them:
+
+    ```toml
+    master = "README.md"
+    design_root = "."
+    anchors = "cpo/anchors"
+    exclude = []
+
+    [roles]
+    definition = '^\s*(?:[-*]\s+)?\*\*${TAG}(?::\*\*|\*\*:)'
+    implementation = 'Implements \[${TAG}\]'
+    test = 'Tests \[${TAG}\]'
+
+    [lint]
+    # bare-tag-without-note = "warn"
+
+    [foreign]
+    # DRV = "vendor/driver"
+    ```
 
 ## Working state
 

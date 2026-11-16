@@ -403,3 +403,46 @@ def test_a_milestone_scoped_to_tags_keeps_the_leads_in_its_code(tmp_path, monkey
     leads = worklist.status(repo, store, defs, "trial")["leads"]["rows"]
     assert [r["where"] for r in leads] == ["src/ring.c:2"]
 
+
+
+def test_an_underlined_section_spans_to_the_next_heading(tmp_path):
+    (tmp_path / "DESIGN.md").write_text("# D\n\n§1 The ring\n-----------\n\nText.\n\n§2 The log\n----------\n\nMore.\n")
+    d = docs.Definition("D§1", "DESIGN.md", 3, "Text.", "The ring", heading=True)
+    assert worklist.span_of(tmp_path, d) == (3, 7)
+
+
+def test_status_asks_for_a_draft_only_where_there_is_code(tmp_path, monkeypatch):
+    import json, sys
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    for name, files in (("docs", {"README.md": "# Top\n"}),
+                        ("code", {"README.md": "# Top\n", "a.c": "int f(void) {\n  return 0;\n}\n"})):
+        repo = tmp_path / name
+        repo.mkdir()
+        for f, text in files.items():
+            (repo / f).write_text(text)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "a"],
+                       cwd=repo, check=True)
+        out = subprocess.run([sys.executable, "-m", "concipio.cli", "status", "--json"], cwd=repo,
+                             capture_output=True, text=True, env=dict(os.environ))
+        got = json.loads(out.stdout)["next"]
+        assert (got is None) == (name == "docs"), name
+
+
+def test_an_unnamed_declaration_moved_by_an_edit_still_counts(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    brief = worklist.next_unit(repo, store, load(repo), "boot", scope=["src/ring.c"])
+    audit = worklist.Audit(store, "boot")
+    state = audit.load()
+    # Pretend ring_put has no name, as some declarations do not.
+    state["claims"][brief["unit"]]["decls"][1][3] = None
+    audit.save(state)
+    ring = repo / "src/ring.c"
+    ring.write_text(ring.read_text().replace("int ring_put", "/* moved */\nint ring_put"))
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n')
+    (repo / "DESIGN.md").write_text("# Design\n\n## 1. The ring\n\n`ring_take` refuses.\n")
+    out = worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
+    assert "error" in out, "the moved, undescribed declaration is still found"
+

@@ -3,8 +3,9 @@
 Parent: [Concipio](../../README.md)
 
 **Status: proposed.** Claiming, recording, and status are built for
-audits, as `cpo audit next`, `done`, `mine`, and `status` [W8, W10, W13],
-over design sections and the code they name or cite; the rest is not.
+audits, as `cpo audit next`, `done`, `note`, `mine`, and `status` [W8,
+W10, W13, W44], over design sections and the code they name or cite, and
+over code no design claims yet [W40]; the rest is not.
 
 Onboarding a C codebase to Concipio found real defects, nearly all from
 one move: take a design section's claims and check them against the
@@ -170,6 +171,53 @@ code. It builds on the kinds of design point [Y1, Y12, Y14], the store
   text is a setting, so a project can measure what the docs add [W9].
   - **CPO§W9:** The same unit, briefed with and without its design text,
     compared by findings and cost [W14].
+
+## Drafting a design
+
+An audit of a repository with no design has nothing to check. An agent
+onboarding one wrote a design of six sections about the code it already
+suspected, audited a twentieth of the code against it, confirmed what it
+suspected, and stopped. The leads `cpo unreachable` and `cpo unwritten`
+had printed went into its summary and no further. A trial on the same
+codebase that first drafted a design of the whole thing, then checked
+it, found a defect nobody had suspected.
+
+- **CPO§W40:** A repository with no design starts by drafting one, and
+  an audit drafts it. Code that no unit claims and nobody exempts is
+  itself a unit to draft: a run of one file's top-level declarations
+  that fits the brief's budget, or one declaration that does not. An
+  audit begun where no design claims any code offers these before any
+  section to check, so the design covers the code before anyone checks
+  it; one begun on a design checks the design first, and drafts last.
+- **CPO§W41:** A drafting brief holds the code and the outline of the
+  design so far, and asks for sections that say what the code does now,
+  in claims a reader could check, naming its declarations in backticks.
+  `cpo audit done <name> <unit> --drafted` refuses while any of the
+  unit's declarations is still unclaimed, and names them: each must be
+  described, exempted as plumbing, or left with a question.
+- **CPO§W42:** The audit records which agent drafted each section, and
+  does not offer that agent the section to check, since checking one's
+  own reading of the code is no second read. The section waits for a
+  helper with its own `CPO_AGENT`.
+- **CPO§W43:** People screen a draft once it is in order: drafted whole,
+  every section checked by a second agent, and the findings recorded.
+  `cpo audit status` says when that is, and asks a person to sign the
+  outline [W17]. Until then a drafted doc says, in a status line under
+  its title, that an agent drafted it and nobody has signed it, so no
+  reader takes it for the project's own design. A finding against a
+  drafted section may be a defect in the code or in the draft, and its
+  brief says to check both.
+- **CPO§W44:** Discoveries are recorded when they are made.
+  `cpo audit note <name> "<text>"` adds a lead, something worth checking
+  that is not the unit in hand, as an item of the audit that any agent
+  can claim and close as it closes a unit. An audit starts with a lead
+  for each unbacked claim `cpo unreachable` finds and each rule
+  `cpo unwritten` finds. A lead outlives the session that noticed it,
+  and `cpo audit status` lists the open ones.
+- **CPO§W45:** `cpo status` on a repository whose design claims none of
+  its code says so first, with the command that starts drafting one.
+  The score of its docs comes after, since a broken link matters less
+  than undocumented code.
 
 ## Planned work
 

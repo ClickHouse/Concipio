@@ -143,21 +143,27 @@ def build_parser():
                      help="only statements whose field has this value")
     add("brief", "print what no agent or person may lose: critical statements and active work")
     au = add("audit", "score the repository; or, with an action, work a named audit")
-    au.add_argument("action", nargs="?", choices=["next", "done", "why", "mine", "status"],
+    au.add_argument("action", nargs="?",
+                    choices=["next", "done", "note", "why", "mine", "status"],
                     help="next: claim a unit and print its brief; done: record its outcome; "
+                         "note: add a lead worth checking later; "
                          "why: what changed in a stale unit; mine: what you hold; "
                          "status: where the audit stands")
     au.add_argument("name", nargs="?", help="the audit's name, such as its date")
-    au.add_argument("unit", nargs="?", help="for done and why: the unit, such as DESIGN§5c")
+    au.add_argument("unit", nargs="?", help="for done and why: the unit, such as DESIGN§5c; "
+                                            "for note: the lead's text")
     au.add_argument("--budget", type=int, default=6000,
                     help="for next: tokens of code the brief may include (default 6000)")
     au.add_argument("--scope", nargs="*", default=[],
                     help="for next: docs, directories, or tags to draw units from")
     out = au.add_mutually_exclusive_group()
     out.add_argument("--verified", action="store_true", help="for done: the unit's claims hold")
+    out.add_argument("--drafted", action="store_true",
+                     help="for done: the design now describes this code")
     out.add_argument("--finding", metavar="TEXT", help="for done: what is wrong, and where")
     out.add_argument("--question", metavar="TEXT", help="for done: what a person must decide")
     au.add_argument("--for", dest="to", metavar="WHO", help="for done --question: whom it is for")
+    au.add_argument("--where", metavar="PATH:LINE", help="for note: where the lead is")
     au.add_argument("--at", metavar="SHA",
                     help="for done: the commit the check was made at, if not HEAD")
     au.add_argument("--against", metavar="REV",
@@ -489,12 +495,60 @@ def describe_changes(changes):
 
 
 # Implements [CPO§W8]
+def audit_extras(r, name):
+    """The lines of an audit's status about drafting, leads, and whether
+    the draft is ready for a person [CPO§W40, CPO§W43, CPO§W44]."""
+    lines = []
+    dr = r["drafting"]
+    if dr["units"]:
+        held = [x for x in dr["rows"] if x["standing"] in ("claimed", "question")]
+        # An audit begun on a design drafts last [CPO§W40], so say when.
+        ahead = sum(1 for x in r["rows"] if x["standing"] in ("open", "stale")) + \
+            sum(1 for x in r["leads"]["rows"] if x["standing"] == "open")
+        when = "first" if r["drafts_first"] else \
+            f"after the {ahead} checks and leads still open" if ahead else "next"
+        lines.append(f"  to draft: {dr['units']} units of code, {dr['lines']} lines, that no "
+                     f"design claims; cpo audit next {name} hands them out {when}.")
+        for x in held:
+            extra = (f" by {x['holder']}" if x["holder"] else "") + (
+                f": {x['note']}" if x["note"] else "")
+            lines.append(f"  {x['standing']:9} {x['unit']}{extra}")
+    open_leads = [x for x in r["leads"]["rows"] if x["standing"] in ("open", "claimed")]
+    if open_leads:
+        lines.append(f"  leads: {len(open_leads)} open")
+        for x in open_leads[:12]:
+            lines.append(f"  {x['standing']:9} {x['unit']} {x['where'] or ''}: {x['name']}")
+        if len(open_leads) > 12:
+            lines.append(f"  ... and {len(open_leads) - 12} more; --json lists them all.")
+    for x in r["leads"]["rows"]:
+        if x["standing"] in ("finding", "question"):
+            lines.append(f"  {x['standing']:9} {x['unit']} {x['where'] or ''}: {x['note']}"
+                         + (f" (for {x['for']})" if x["for"] else ""))
+    if r["ready"]:
+        lines.append("  The draft is in order: every unit is drafted and checked, and every "
+                     "lead closed. Ask a person to sign its outline, the docs, sections, and "
+                     "headings, not every line.")
+    return lines
+
+
 def cmd_worklist(args, defs, repo):
     from . import worklist
     from .store import Store
     if not args.name:
         raise SystemExit(f"cpo audit {args.action} needs the audit's name")
     store = Store(repo)
+    if args.action == "note":
+        if not args.unit:
+            raise SystemExit("cpo audit note NAME TEXT needs the lead's text")
+        with store.lock():
+            audit = worklist.Audit(store, args.name)
+            state = audit.load()
+            tag = worklist.add_lead(state, args.unit, args.where, worklist.agent()[0])
+            audit.save(state)
+        audit.log({"event": "note", "unit": tag, "by": worklist.agent()[0], "note": args.unit})
+        emit({"audit": args.name, "unit": tag}, f"{tag}: noted in {args.name}; any agent can "
+             f"claim it with cpo audit next {args.name}.", args.json)
+        return 0
     if args.unit:
         args.unit = worklist.unit_name(defs, args.unit)
     args.scope = [worklist.unit_name(defs, s) for s in args.scope]
@@ -503,8 +557,13 @@ def cmd_worklist(args, defs, repo):
         if b.get("error") or b.get("done"):
             emit(b, b.get("error") or b["message"], args.json)
             return 2 if b.get("error") else 0
-        lines = [f"{b['unit']} ({b['name']}), {b['where']}, claimed by {b['holder']} for two "
-                 "hours.", ""]
+        what = {"draft": "Code to draft", "lead": "A lead"}.get(b["kind"])
+        lines = [(f"{what}, {b['unit']}" if what else f"{b['unit']} ({b['name']})")
+                 + (f", {b['where']}" if b["where"] else "")
+                 + f", claimed by {b['holder']} for two hours.", ""]
+        if b.get("drafted"):
+            lines += ["An agent drafted this section from the code, so a mismatch may be a "
+                      "defect in the code or in the draft; check both, and say which.", ""]
         if b["before"]:
             lines += [f"It was {b['before']['status']} at {b['before']['sha']}"
                       + (f": {b['before']['note']}" if b["before"].get("note") else "")
@@ -521,20 +580,22 @@ def cmd_worklist(args, defs, repo):
                 lines += [f"--- {c['where']}", c["text"]]
         if b["pointers"]:
             lines.append("It points to: " + ", ".join(b["pointers"]))
-        if not b["code"]:
+        if not b["code"] and b["kind"] == "check":
             lines.append("It names and cites no code Concipio can find; check it against the "
                          "code yourself.")
-        lines += ["", f"Check each claim against the code, then: cpo audit done {args.name} "
-                  f"{b['unit']} --verified | --finding \"...\" | --question \"...\""]
+        lines += ["", b["next"] + "."]
         emit(b, "\n".join(lines), args.json)
         return 0
     if args.action == "done":
-        if not args.unit or not (args.verified or args.finding or args.question):
-            raise SystemExit("cpo audit done NAME UNIT needs --verified, --finding, or --question")
-        st = "verified" if args.verified else "finding" if args.finding else "question"
+        if not args.unit or not (args.verified or args.drafted or args.finding or args.question):
+            raise SystemExit("cpo audit done NAME UNIT needs --verified, --drafted, --finding, "
+                             "or --question")
+        st = "verified" if args.verified else "drafted" if args.drafted else \
+            "finding" if args.finding else "question"
         r = worklist.record(repo, store, defs, args.name, args.unit, st,
                             args.finding or args.question, args.to, args.at)
-        emit(r, r.get("error") or f"{args.unit}: {st} at {r['sha']}.", args.json)
+        emit(r, r.get("error") or f"{args.unit}: {st} at {r['sha']}" + (
+            f", in {', '.join(r['sections'])}" if r.get("sections") else "") + ".", args.json)
         return 1 if r.get("error") else 0
     if args.action == "why":
         if not args.unit:
@@ -550,10 +611,12 @@ def cmd_worklist(args, defs, repo):
         emit(r, "\n".join(lines), args.json)
         return 0
     r = worklist.status(repo, store, defs, args.name, only_me=args.action == "mine")
-    lines = [f"{r['audit']}: {r['verified_units']} of {r['units']} units verified, "
-             f"{r['verified_lines']} of {r['lines']} lines of the code they claim."
+    lines = [(f"{r['audit']}: {r['verified_units']} of {r['units']} units verified, "
+              f"{r['verified_lines']} of {r['lines']} lines of the code they claim."
+              if r["units"] else f"{r['audit']}: no design units to check yet.")
              if args.action == "status" else f"Yours in {r['audit']}:"]
-    lines.append("  " + ", ".join(f"{n} {k}" for k, n in sorted(r["counts"].items())))
+    if r["counts"]:
+        lines.append("  " + ", ".join(f"{n} {k}" for k, n in sorted(r["counts"].items())))
     for row in r["rows"]:
         if row["standing"] in ("claimed", "finding", "question", "stale"):
             extra = (f" by {row['holder']}" if row["holder"] else "") + (
@@ -564,6 +627,7 @@ def cmd_worklist(args, defs, repo):
     if quiet:
         lines.append(f"  ({quiet} open or verified units are not listed; --json lists every "
                      "unit.)")
+    lines += audit_extras(r, args.name)
     emit(r, "\n".join(lines), args.json)
     return 0
 
@@ -867,9 +931,14 @@ def cmd_status(args, defs, repo):
         flight["audits"].append({"name": name, "units": r["units"], "counts": r["counts"],
                                  "verified_lines": r["verified_lines"], "lines": r["lines"],
                                  "yours": mine})
+        flight["audits"][-1].update(to_draft=r["drafting"]["units"],
+                                    open_leads=r["leads"]["open"], ready=r["ready"])
         counts = ", ".join(f"{n} {k}" for k, n in sorted(r["counts"].items()))
-        lines.append(f"  audit {name}: {r['verified_units']} of {r['units']} units verified "
-                     f"({counts})" + (f"; you hold {', '.join(mine)}" if mine else ""))
+        lines.append(f"  audit {name}: {r['verified_units']} of {r['units']} units verified"
+                     + (f" ({counts})" if counts else "")
+                     + (f", {r['drafting']['units']} to draft" if r["drafting"]["units"] else "")
+                     + (f", {r['leads']['open']} open leads" if r["leads"]["open"] else "")
+                     + (f"; you hold {', '.join(mine)}" if mine else ""))
     try:
         with review.Store(repo).lock():
             data, human = review.cmd_status(review.Review(repo), args)
@@ -884,7 +953,14 @@ def cmd_status(args, defs, repo):
         score.insert(1, f"  The score counts problems lint can see; {cited:.1f}% of the code "
                         "cites a design, which it does not count.")
     out = (["In progress:"] + lines + [""] if lines else ["Nothing in progress."]) + score
-    emit({"in_progress": flight, **data}, "\n".join(out), args.json)
+    nxt = None
+    if cited == 0 and not flight["audits"]:
+        # Undocumented code matters more than the docs' score [CPO§W45].
+        nxt = ("No design claims any of this code. Draft one with an audit: cpo audit next "
+               f"{time.strftime('%Y-%m-%d')}. It hands out the code, a file's declarations at a "
+               "time, to describe, then the sections to check; `cpo help agent` says how.")
+        out = [nxt, ""] + out
+    emit({"in_progress": flight, "next": nxt, **data}, "\n".join(out), args.json)
     return status
 
 

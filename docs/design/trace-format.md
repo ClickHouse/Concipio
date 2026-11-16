@@ -409,6 +409,16 @@ code from outside it.
     design, which a reviewer can check; an unjustified mark says nobody
     has found one, which a reviewer should ask about. A project may aim to
     account for all its code while citing only part of it.
+  - **CPO§T76:** `.cpo` may exempt code instead of a comment, for a
+    project whose code should not carry the tool's name: each `[[exempt]]`
+    gives a `path` glob, optionally a declaration `name` glob, and `why`.
+    It counts as a comment's exemption does, and the report lists it with
+    its reason.
+  - **CPO§T77:** Coverage also counts what the design claims: the
+    declarations a design unit names in backticks [W2]. Naming code in a
+    section traces it from the other side, as a citation does from the
+    code. `cpo coverage` reports code claimed by either, apart from code
+    cited, so an audit's work shows before anyone cites a section.
 - **CPO§T16:** `.cpo` may exclude paths by glob. Excluded code is outside the
   check entirely, and the report says how much was excluded.
 

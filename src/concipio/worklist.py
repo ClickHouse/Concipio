@@ -233,7 +233,7 @@ def standing(state, tag, fp, now=None):
     else:
         held = None
     if out:
-        if out["print"] != fp:
+        if out.get("print") != fp:
             return held or "stale"
         return out["status"]
     return held or "open"
@@ -332,9 +332,13 @@ def guard(d, lines):
         and any(line.split() == ["#ifndef", d[3]] for line in lines[:d[0]])
 
 
-def exempted(found, lines):
-    """The declarations a `CPO§exempt` comment marks as serving no design."""
-    out = set()
+def exempted(found, lines, rules=(), path=None):
+    """The declarations marked as serving no design: by a `CPO§exempt`
+    comment, or by an `[[exempt]]` rule in `.cpo` [CPO§T76], which may
+    exempt a whole file."""
+    out = {(a, b) for a, b, _ in lint.config_exemptions(rules, path, found)} if path else set()
+    if (1, 10 ** 9) in out:
+        return {(d[0], d[1]) for d in found}
     for n, line in enumerate(lines, 1):
         if lint.EXEMPT.search(line):
             node = lint.covered_node(found, n, lines)
@@ -349,6 +353,7 @@ def drafts(root, files, everything, exclude=()):
     drafted; they are evidence for the design, not part of it."""
     import fnmatch
     claimed = lines_of(root, [r for _, regions, _ in everything for r in regions])
+    rules = docs.config(root).get("exempt", [])
     out, seen = [], set()
     for f in files:
         if docs.is_doc(f) or spans.is_test(f) or any(fnmatch.fnmatch(f, p) for p in exclude):
@@ -357,7 +362,7 @@ def drafts(root, files, everything, exclude=()):
         if not got:
             continue
         found, lines = got
-        skip = exempted(found, lines)
+        skip = exempted(found, lines, rules, f)
         run, size = [], 0
         for d in outermost(found):
             a, b = d[0], d[1]
@@ -452,23 +457,40 @@ def items(root, defs, state, scope=(), files=None):
     unit claims to draft, and the leads, each as (kind, tag, print, what)."""
     files = files if files is not None else docs.tracked_files(root)
     everything = survey(root, defs, (), files)
-    tags = {d.tag for d in units(root, defs, scope)} if scope else None
-    out = [("check", u[0].tag, u[2], u) for u in everything if tags is None or u[0].tag in tags]
     code_scope = [s for s in scope if s not in defs]
+    tags = {d.tag for d in units(root, defs, scope)} if scope else None
+    if tags is not None and code_scope:
+        # A scope of code takes in the sections that claim code in it, as
+        # those drafted for it do.
+        tags |= {u[0].tag for u in everything
+                 if any(not docs.is_doc(r[0]) and under_scope(r[0], code_scope) for r in u[1])}
+    out = [("check", u[0].tag, u[2], u) for u in everything if tags is None or u[0].tag in tags]
     # A scope of tags alone holds no code to draft.
     if not scope or code_scope:
         scoped = [f for f in files if under_scope(f, code_scope)]
         out += [("draft", x.tag, x.print, x) for x in
                 drafts(root, scoped, everything, docs.config(root).get("exclude", []))]
-    return out + lead_items(state, scope, defs)
+    return out + lead_items(state, scope, defs, scoped_lines(root, out) if scope else frozenset())
 
 
-def lead_items(state, scope, defs):
-    """An audit's leads as items, those in its scope."""
+def lead_items(state, scope, defs, within=frozenset()):
+    """An audit's leads as items, those in its scope: under a path it
+    names, or in the code its tags' units claim, `within`."""
     code_scope = [s for s in scope if s not in defs]
+
+    def inside(lead):
+        path, _, line = (lead.get("where") or "").rpartition(":")
+        return (code_scope and under_scope(path, code_scope)) or \
+            (line.isdigit() and (path, int(line)) in within)
+
     return [("lead", tag, lead_print(lead), lead) for tag, lead in state.get("leads", {}).items()
-            if not scope or code_scope and under_scope(
-                (lead.get("where") or "").rpartition(":")[0], code_scope)]
+            if not scope or inside(lead)]
+
+
+def scoped_lines(root, found):
+    """The lines of code the units to check claim, as (path, line)."""
+    return frozenset(lines_of(root, [r for kind, _, _, u in found if kind == "check"
+                                     for r in u[1]]))
 
 
 def item_standing(state, kind, tag, fp, now):
@@ -476,6 +498,73 @@ def item_standing(state, kind, tag, fp, now):
     # Drafted code no unit claims any more, as when its section was cut, is
     # to be drafted again.
     return "open" if kind == "draft" and st in ("drafted", "stale") else st
+
+
+# Implements [CPO§W48, CPO§W49]
+def milestone(root, state, name):
+    """The milestone a person approved for an audit: one recorded with
+    `cpo audit start`, or else one `.cpo` declares, approved by the review
+    of the commit that added it. None if nobody has approved one."""
+    if state.get("milestone"):
+        return state["milestone"]
+    for a in docs.config(root).get("milestone", []):
+        if a.get("name") == name:
+            scope = a.get("scope", [])
+            return {"scope": [scope] if isinstance(scope, str) else scope,
+                    "approved_by": ".cpo", "goal": "in order"}
+    return None
+
+
+# Implements [CPO§W47]
+def propose(root, store, defs, name, scope=()):
+    """An audit's size, before anyone starts it, as a person would judge
+    it: the code to draft, the sections to check, and the leads."""
+    state = Audit(store, name).load()
+    files = docs.tracked_files(root)
+    if not state.get("seeded") and not state["units"]:
+        state = dict(state, leads=dict(state.get("leads", {})))
+        seed_leads(root, defs, state, files)
+    now = int(time.time())
+    found = items(root, defs, state, scope, files)
+    count = {"draft": [0, 0], "check": [0, 0], "lead": [0, 0]}
+    for kind, tag, fp, what in found:
+        if item_standing(state, kind, tag, fp, now) in ("open", "stale", "claimed"):
+            count[kind][0] += 1
+            count[kind][1] += (sum(b - a + 1 for _, a, b in what.regions) if kind == "draft"
+                               else len(lines_of(root, what[1])) if kind == "check" else 0)
+    where = ", ".join(f"`{s}`" for s in scope) if scope else "the whole repository"
+    parts = []
+    if count["draft"][0]:
+        parts.append(f"{count['draft'][0]} units of code ({count['draft'][1]} lines) to describe "
+                     "in a design, each section then checked by a second agent")
+    if count["check"][0]:
+        parts.append(f"{count['check'][0]} design sections to check against "
+                     f"{count['check'][1]} lines of code")
+    if count["lead"][0]:
+        parts.append(f"{count['lead'][0]} leads to look into")
+    if not parts:
+        return {"audit": name, "scope": list(scope), "counts": count,
+                "sentence": f"Nothing in {where} needs work in {name}."}
+    approve = (f"cpo audit start {name}" + "".join(f" --scope {s}" for s in scope)
+               + " --approved-by \"<who>\"")
+    sentence = (f"Proposed milestone: the design of {where} drafted, checked, and in order. "
+                "That is " + "; ".join(parts) + ". I would work until it is in order, or until "
+                "a question only you can answer blocks me. Shall I go ahead, or take a smaller "
+                "scope?")
+    return {"audit": name, "scope": list(scope), "counts": count, "sentence": sentence,
+            "approve": approve}
+
+
+def start(root, store, name, scope, who):
+    """Record the milestone a person approved [CPO§W48]."""
+    audit = Audit(store, name)
+    with store.lock():
+        state = audit.load()
+        state["milestone"] = {"scope": list(scope), "approved_by": who, "goal": "in order",
+                              "at": int(time.time()), "sha": head(root)}
+        audit.save(state)
+    audit.log({"event": "start", "scope": list(scope), "approved_by": who, "by": agent()[0]})
+    return {"audit": name, **state["milestone"]}
 
 
 # Implements [CPO§W8]
@@ -496,6 +585,9 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
     files = docs.tracked_files(root)
     with store.lock():
         state = audit.load()
+        goal = milestone(root, state, name)
+        # Helpers ask with the audit's name alone; the approved scope holds.
+        scope = scope or (goal["scope"] if goal else ())
         found = items(root, defs, state, scope, files)
         if not state.get("seeded"):
             # An audit begun with no design claiming code drafts one before
@@ -507,7 +599,8 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
             if not state["units"]:
                 seed_leads(root, defs, state, files)
             state["seeded"] = True
-            found += lead_items(state, scope, defs)
+            found += lead_items(state, scope, defs,
+                                scoped_lines(root, found) if scope else frozenset())
         drafted = state.get("drafted", {})
         mine = {t for t, c in state["claims"].items() if c["holder"] == me and c["until"] > now}
         st = {i[1]: item_standing(state, i[0], i[1], i[2], now) for i in found}
@@ -575,8 +668,9 @@ def next_unit(root, store, defs, name, budget=6000, scope=()):
                 f"{tag} --verified, or --finding \"<what is wrong, and where>\", or "
                 "--question \"<what a person must decide>\" --for <whom>")
     return {"audit": name, "kind": kind, "unit": tag, "changed": changed, "name": title,
+            "milestone": goal,
             "where": where, "text": text, "code": code, "before": before, "holder": me,
-            # A drafted section may be wrong where the code is right [CPO§W43].
+            # A drafted section may be wrong where the code is right.
             "drafted": drafted.get(tag) if kind == "check" else None,
             # A file the brief already shows code from needs no pointer to it.
             "pointers": [p for p in (what[0].pointers if kind == "check" else []) if not any(
@@ -959,7 +1053,7 @@ def reprint(root, store, name):
     return sum(len(t) for t in old.values())
 
 
-# Implements [CPO§W13, CPO§W43]
+# Implements [CPO§W13]
 def status(root, store, defs, name, only_me=False):
     """Where an audit stands: each unit's standing, the verified share by
     units and by the lines they claim, what is open, the code left to
@@ -967,9 +1061,15 @@ def status(root, store, defs, name, only_me=False):
     me, _ = agent()
     reprint(root, store, name)
     state = Audit(store, name).load()
+    goal = milestone(root, state, name)
     now = int(time.time())
     rows, drafting, leads = [], [], []
-    for kind, tag, fp, what in items(root, defs, state):
+    found = items(root, defs, state, goal["scope"] if goal else ())
+    # Until its first `next`, an audit's order is what that `next` will
+    # choose.
+    first = state.get("drafts_first") if state.get("seeded") else \
+        not state["units"] and not any(i[0] == "check" and i[3][1] for i in found)
+    for kind, tag, fp, what in found:
         st = item_standing(state, kind, tag, fp, now)
         claim = state["claims"].get(tag)
         out = state["units"].get(tag) or {}
@@ -1007,13 +1107,17 @@ def status(root, store, defs, name, only_me=False):
         r["lines"] = len(r["lines"])
     busy = ("open", "claimed", "stale")
     # A draft is in order when all of it is drafted and checked, and every
-    # lead is closed [CPO§W43].
-    ready = bool(rows) and not only_me and not any(r["standing"] in busy for r in rows) and \
-        not any(r["standing"] in busy for r in drafting + leads)
+    # lead is closed; a question still waiting on a person blocks it [CPO§W43].
+    everything = rows + drafting + leads
+    waiting = [r["unit"] for r in everything if r["standing"] == "question"]
+    ready = bool(rows) and not only_me and not waiting and \
+        not any(r["standing"] in busy for r in everything)
     return {"audit": name, "units": len(rows), "counts": counts,
             "verified_units": counts.get("verified", 0),
             "verified_lines": done, "lines": total, "rows": rows,
             "drafting": {"units": len(drafting), "lines": sum(r["lines"] for r in drafting),
                          "rows": drafting},
             "leads": {"open": sum(1 for r in leads if r["standing"] in busy), "rows": leads},
-            "drafts_first": state.get("drafts_first", True), "ready": ready}
+            "drafts_first": first if first is not None else True, "ready": ready,
+            "questions": waiting,
+            "milestone": goal}

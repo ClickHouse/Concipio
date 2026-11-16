@@ -283,3 +283,123 @@ def test_a_struct_named_with_its_keyword_is_claimed(tmp_path, monkeypatch):
     (repo / "DESIGN.md").write_text("# Design\n\n## 1. Pins\n\n`struct pin` counts holders.\n")
     out = worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
     assert out["status"] == "drafted" and out["sections"] == ["DESIGN§1"]
+
+
+def test_cpo_exempts_code_without_a_comment_naming_the_tool(tmp_path, monkeypatch):
+    from concipio import lint
+    repo, store = bare(tmp_path, monkeypatch)
+    (repo / ".cpo").write_text('[[exempt]]\npath = "src/glue.c"\nwhy = "plumbing"\n\n'
+                               '[[exempt]]\npath = "src/ring.c"\nname = "ring_p*"\nwhy = "shim"\n')
+    tags = {r["unit"] for r in worklist.status(repo, store, load(repo), "boot")["drafting"]["rows"]}
+    assert tags == {"draft:src/ring.c:ring_take"}, "a whole file, and a declaration by name"
+    rows = {r["path"]: r for r in lint.coverage(repo, ["src/glue.c", "src/ring.c"], load(repo))}
+    assert rows["src/glue.c"]["exempt"] == 3 and rows["src/ring.c"]["exempt"] == 4
+    assert rows["src/ring.c"]["exemptions"][0]["by"] == ".cpo"
+
+
+def test_code_the_design_names_counts_as_claimed(tmp_path, monkeypatch):
+    from concipio import cli, lint
+    repo, store = bare(tmp_path, monkeypatch)
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n')
+    (repo / "DESIGN.md").write_text("# Design\n\n## 1. The ring\n\n`ring_take` refuses.\n")
+    defs = load(repo)
+    rows = {r["path"]: r for r in lint.coverage(repo, ["src/ring.c"], defs,
+                                                named=cli.named_lines(repo, defs))}
+    assert rows["src/ring.c"]["covered"] == 0 and rows["src/ring.c"]["claimed"] == 3
+
+
+def test_a_proposed_milestone_once_approved_scopes_the_audit(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    whole = worklist.propose(repo, store, load(repo), "boot")
+    assert whole["counts"]["draft"][0] == 2 and "Shall I go ahead" in whole["sentence"]
+    assert worklist.Audit(store, "boot").load()["units"] == {}, "proposing records nothing"
+    worklist.start(repo, store, "boot", ["src/glue.c"], "Ada")
+    brief = worklist.next_unit(repo, store, load(repo), "boot")
+    assert brief["unit"] == "draft:src/glue.c:glue" and brief["milestone"]["approved_by"] == "Ada"
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n')
+    (repo / "DESIGN.md").write_text("# Design\n\n## 1. Glue\n\n`glue` returns two.\n")
+    worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
+    monkeypatch.setenv("CPO_AGENT", "a2")
+    assert worklist.next_unit(repo, store, load(repo), "boot")["unit"] == "DESIGN§1", \
+        "a scope of code takes in the section drafted for it"
+
+
+def test_cpo_declares_a_milestone_for_a_run_nobody_attends(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "ci")
+    (repo / ".cpo").write_text('[audit.weights]\norphan = 2\n\n'
+                               '[[milestone]]\nname = "nightly"\nscope = "src/glue.c"\n')
+    brief = worklist.next_unit(repo, store, load(repo), "nightly")
+    assert brief["unit"] == "draft:src/glue.c:glue" and brief["milestone"]["approved_by"] == ".cpo"
+
+
+def test_code_both_named_and_exempted_counts_once(tmp_path, monkeypatch):
+    from concipio import cli, lint
+    repo, store = bare(tmp_path, monkeypatch)
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n\n'
+                               '[[exempt]]\npath = "src/ring.c"\nwhy = "shim"\n')
+    (repo / "DESIGN.md").write_text("# Design\n\n## 1. The ring\n\n`ring_take` refuses.\n")
+    defs = load(repo)
+    row = lint.coverage(repo, ["src/ring.c"], defs, named=cli.named_lines(repo, defs))[0]
+    assert row["claimed"] + row["exempt"] <= row["lines"]
+
+
+def test_propose_counts_noted_leads_and_status_knows_the_order_early(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    audit = worklist.Audit(store, "trial")
+    state = audit.load()
+    worklist.add_lead(state, "check the ring's bound", "src/ring.c:1", "a1")
+    audit.save(state)
+    assert worklist.propose(repo, store, defs, "trial")["counts"]["lead"][0] == 1
+    assert worklist.status(repo, store, defs, "trial")["drafts_first"] is False, \
+        "an audit begun on a design checks before it drafts"
+
+
+def test_code_whose_section_is_cut_is_offered_again(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    brief = worklist.next_unit(repo, store, load(repo), "boot", scope=["src/ring.c"])
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n')
+    (repo / "DESIGN.md").write_text(
+        "# Design\n\n## 1. The ring\n\n`ring_take` refuses; `ring_put` stores.\n")
+    worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
+    (repo / "DESIGN.md").write_text("# Design\n")
+    rows = worklist.status(repo, store, load(repo), "boot")["drafting"]["rows"]
+    assert {r["unit"]: r["standing"] for r in rows}[brief["unit"]] == "open"
+    assert worklist.next_unit(repo, store, load(repo), "boot", scope=["src/ring.c"])["kind"] == "draft"
+
+
+def test_an_exemption_without_a_path_exempts_nothing(tmp_path, monkeypatch):
+    from concipio import lint
+    repo, store = bare(tmp_path, monkeypatch)
+    (repo / ".cpo").write_text('[[exempt]]\nwhy = "everything?"\n\n[[exempt]]\nname = "ring_*"\n')
+    rows = lint.coverage(repo, ["src/ring.c", "src/glue.c"], load(repo))
+    assert all(r["exempt"] == 0 for r in rows)
+    tags = {r["unit"] for r in worklist.status(repo, store, load(repo), "boot")["drafting"]["rows"]}
+    assert len(tags) == 2
+
+
+def test_a_question_waiting_on_a_person_blocks_the_milestone(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    worklist.record(repo, store, defs, "trial", "D§1", "verified")
+    worklist.record(repo, store, defs, "trial", "D§2", "question", "is the log bounded?", "Ada")
+    st = worklist.status(repo, store, defs, "trial")
+    assert not st["ready"] and st["questions"] == ["D§2"]
+    worklist.record(repo, store, defs, "trial", "D§2", "verified")
+    assert worklist.status(repo, store, defs, "trial")["ready"]
+
+
+def test_a_milestone_scoped_to_tags_keeps_the_leads_in_its_code(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    audit = worklist.Audit(store, "trial")
+    state = audit.load()
+    worklist.add_lead(state, "check the ring's bound", "src/ring.c:2", "a1")
+    worklist.add_lead(state, "elsewhere", "src/log.c:3", "a1")
+    audit.save(state)
+    worklist.start(repo, store, "trial", ["D§1"], "Ada")
+    leads = worklist.status(repo, store, defs, "trial")["leads"]["rows"]
+    assert [r["where"] for r in leads] == ["src/ring.c:2"]
+

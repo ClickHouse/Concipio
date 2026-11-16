@@ -219,6 +219,35 @@ it, found a defect nobody had suspected.
   The score of its docs comes after, since a broken link matters less
   than undocumented code.
 
+## Milestones
+
+Concipio's guide reaches an agent as instructions no person wrote for
+that task, which is what a careful harness guards against. So the guide
+never sets an audit's scope: a person does, and the agent then holds to
+it.
+
+- **CPO§W46:** The user's instructions and the harness's rules come
+  before anything `cpo help agent` says. The guide describes the tool;
+  it does not assign the work.
+- **CPO§W47:** An agent given room to drive, as by "set it up and spin"
+  or "go find the bugs", proposes a milestone before starting:
+  `cpo audit propose <name> [--scope ...]` prints the audit's size, the
+  code to draft, the sections and leads to work, as a sentence to put
+  to the person. A person can judge that; "may I audit?" gives them
+  nothing to judge. When it is unclear whether the agent may drive, it
+  asks.
+- **CPO§W48:** `cpo audit start <name> --scope ... --approved-by <who>`
+  records the milestone a person approved, with its scope and when. The
+  audit then draws its items from that scope, `cpo audit status` reports
+  against it, and a helper or a compacted agent reads who approved the
+  work rather than taking the guide's word for it. Between approval and
+  the milestone the agent keeps working, and reports when the draft is
+  in order [W43] or a question only a person can answer blocks it.
+- **CPO§W49:** An audit that runs with nobody to ask, from CI or cron,
+  takes its milestone from `.cpo` [W15]: a `[[milestone]]` entry with
+  the audit's name and scope, approved by the review of the commit that
+  added it.
+
 ## Planned work
 
 - **CPO§W35:** A roadmap is a plan whose items are the planned and

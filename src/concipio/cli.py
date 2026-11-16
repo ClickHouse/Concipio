@@ -144,8 +144,11 @@ def build_parser():
     add("brief", "print what no agent or person may lose: critical statements and active work")
     au = add("audit", "score the repository; or, with an action, work a named audit")
     au.add_argument("action", nargs="?",
-                    choices=["next", "done", "note", "why", "mine", "status"],
-                    help="next: claim a unit and print its brief; done: record its outcome; "
+                    choices=["propose", "start", "next", "done", "note", "why", "mine",
+                             "status"],
+                    help="propose: size a milestone to put to a person; start: record the "
+                         "milestone a person approved; "
+                         "next: claim a unit and print its brief; done: record its outcome; "
                          "note: add a lead worth checking later; "
                          "why: what changed in a stale unit; mine: what you hold; "
                          "status: where the audit stands")
@@ -164,6 +167,8 @@ def build_parser():
     out.add_argument("--question", metavar="TEXT", help="for done: what a person must decide")
     au.add_argument("--for", dest="to", metavar="WHO", help="for done --question: whom it is for")
     au.add_argument("--where", metavar="PATH:LINE", help="for note: where the lead is")
+    au.add_argument("--approved-by", metavar="WHO",
+                    help="for start: the person who approved the milestone")
     au.add_argument("--at", metavar="SHA",
                     help="for done: the commit the check was made at, if not HEAD")
     au.add_argument("--against", metavar="REV",
@@ -434,11 +439,22 @@ def under(repo, files, paths):
     return [f for f in files if any(f == w or f.startswith(w + "/") for w in want)]
 
 
+def named_lines(repo, defs):
+    """The lines of code each file's design units claim, by name or by
+    citation [CPO§T77]."""
+    from . import worklist
+    out = {}
+    for _, regions, _ in worklist.survey(repo, defs):
+        for path, n in worklist.lines_of(repo, regions):
+            out.setdefault(path, set()).add(n)
+    return out
+
+
 def cmd_coverage(args, defs, repo):
     files = docs.tracked_files(repo)
     files = under(repo, files, args.paths)
     rows = lint_mod.coverage(repo, files, defs, docs.config(repo).get("exclude", []),
-                             strict=args.strict)
+                             strict=args.strict, named=named_lines(repo, defs))
 
     def total(rs):
         return sum(r["covered"] for r in rs), sum(r["lines"] for r in rs)
@@ -454,9 +470,13 @@ def cmd_coverage(args, defs, repo):
     for label, rs in (("implementation", impl), ("tests", tests)):
         c, n = total(rs)
         lines.append(f"{label:15} {c:7} of {n:7} lines covered  {pct(c, n)}")
+        k = sum(r["claimed"] for r in rs)
+        if k > c:
+            lines.append(f"{'':15} {k:7} claimed by citations or the design naming them, "
+                         f"{pct(k, n)}")
         x = sum(r["exempt"] for r in rs)
         if x:
-            lines.append(f"{'':15} {x:7} more exempt, {pct(c + x, n)} accounted for")
+            lines.append(f"{'':15} {x:7} more exempt, {pct(max(c, k) + x, n)} accounted for")
     un = [r for r in rows if not r["measured"]]
     if un:
         lines.append(f"{'unmeasured':15} {sum(r['lines'] for r in un):7} lines in {len(un)} "
@@ -473,10 +493,14 @@ def cmd_coverage(args, defs, repo):
     if marks:
         lines.append("")
         lines.append(f"Exempt, as serving no design [T15]:")
-        lines += [f"  {path}:{e['line']}: {e['reason']}" for path, e in marks]
+        lines += [f"  {path}" + (f":{e['line']}" if e["line"] else "")
+                  + (" (in .cpo)" if e.get("by") else "") + f": {e['reason']}"
+                  for path, e in marks]
     emit({"implementation": {**dict(zip(("covered", "lines"), total(impl))),
+                             "claimed": sum(r["claimed"] for r in impl),
                              "exempt": sum(r["exempt"] for r in impl)},
           "tests": {**dict(zip(("covered", "lines"), total(tests))),
+                    "claimed": sum(r["claimed"] for r in tests),
                     "exempt": sum(r["exempt"] for r in tests)},
           "unmeasured": sum(r["lines"] for r in un), "files": rows},
          "\n".join(lines), args.json)
@@ -524,10 +548,16 @@ def audit_extras(r, name):
         if x["standing"] in ("finding", "question"):
             lines.append(f"  {x['standing']:9} {x['unit']} {x['where'] or ''}: {x['note']}"
                          + (f" (for {x['for']})" if x["for"] else ""))
+    busy = ("open", "claimed", "stale")
+    if r.get("questions") and not any(x["standing"] in busy
+                                      for x in r["rows"] + dr["rows"] + r["leads"]["rows"]):
+        lines.append(f"  Only questions for a person remain: {', '.join(r['questions'])}. The "
+                     "milestone is reached when they are answered.")
     if r["ready"]:
-        lines.append("  The draft is in order: every unit is drafted and checked, and every "
-                     "lead closed. Ask a person to sign its outline, the docs, sections, and "
-                     "headings, not every line.")
+        lines.append(("  The milestone is reached" if r.get("milestone") else
+                      "  The draft is in order") + ": every unit is drafted and checked, and "
+                     "every lead closed. Ask a person to sign its outline, the docs, sections, "
+                     "and headings, not every line.")
     return lines
 
 
@@ -537,6 +567,22 @@ def cmd_worklist(args, defs, repo):
     if not args.name:
         raise SystemExit(f"cpo audit {args.action} needs the audit's name")
     store = Store(repo)
+    if args.action == "propose":
+        r = worklist.propose(repo, store, defs, args.name,
+                             [worklist.unit_name(defs, x) for x in args.scope])
+        text = r["sentence"] + (f"\n\nOnce they agree: {r['approve']}" if r.get("approve") else "")
+        emit(r, text, args.json)
+        return 0
+    if args.action == "start":
+        if not args.approved_by:
+            raise SystemExit("cpo audit start NAME needs --approved-by: the person who agreed "
+                             "to the milestone. Propose one first with cpo audit propose NAME.")
+        r = worklist.start(repo, store, args.name,
+                           [worklist.unit_name(defs, x) for x in args.scope], args.approved_by)
+        where = ", ".join(r["scope"]) or "the whole repository"
+        emit(r, f"{args.name}: milestone recorded, {where} in order, approved by "
+             f"{r['approved_by']}. Work it with cpo audit next {args.name}.", args.json)
+        return 0
     if args.action == "note":
         if not args.unit:
             raise SystemExit("cpo audit note NAME TEXT needs the lead's text")
@@ -561,6 +607,9 @@ def cmd_worklist(args, defs, repo):
         lines = [(f"{what}, {b['unit']}" if what else f"{b['unit']} ({b['name']})")
                  + (f", {b['where']}" if b["where"] else "")
                  + f", claimed by {b['holder']} for two hours.", ""]
+        if not b.get("milestone"):
+            lines += ["No person has approved a milestone for this audit. If you were given "
+                      f"room to drive, propose one first: cpo audit propose {args.name}.", ""]
         if b.get("drafted"):
             lines += ["An agent drafted this section from the code, so a mismatch may be a "
                       "defect in the code or in the draft; check both, and say which.", ""]
@@ -611,10 +660,15 @@ def cmd_worklist(args, defs, repo):
         emit(r, "\n".join(lines), args.json)
         return 0
     r = worklist.status(repo, store, defs, args.name, only_me=args.action == "mine")
+    goal = r.get("milestone")
     lines = [(f"{r['audit']}: {r['verified_units']} of {r['units']} units verified, "
               f"{r['verified_lines']} of {r['lines']} lines of the code they claim."
               if r["units"] else f"{r['audit']}: no design units to check yet.")
              if args.action == "status" else f"Yours in {r['audit']}:"]
+    if args.action == "status":
+        lines.append(f"  milestone: {', '.join(goal['scope']) or 'the whole repository'} in "
+                     f"order, approved by {goal['approved_by']}" if goal else
+                     f"  milestone: none approved; cpo audit propose {args.name} sizes one")
     if r["counts"]:
         lines.append("  " + ", ".join(f"{n} {k}" for k, n in sorted(r["counts"].items())))
     for row in r["rows"]:
@@ -758,11 +812,15 @@ def audit_at(repo, args, defs=None):
     result = lint_mod.audit(repo, files, defs, lint_limits(repo, args), docs.config(repo))
     exclude = docs.config(repo).get("exclude", [])
     result["coverage"] = {}
+    named = named_lines(repo, defs)
     for key, strict in (("any", False), ("strict", True)):
-        rows = [r for r in lint_mod.coverage(repo, files, defs, exclude, strict)
+        rows = [r for r in lint_mod.coverage(repo, files, defs, exclude, strict, named)
                 if r["measured"] and not r["test"]]
         n = sum(r["lines"] for r in rows)
         result["coverage"][key] = 100 * sum(r["covered"] for r in rows) / n if n else 0.0
+        if key == "any":
+            result["coverage"]["claimed"] = 100 * sum(r["claimed"] for r in rows) / n \
+                if n else 0.0
         if key == "strict":
             done = sum(r["covered"] + r["exempt"] for r in rows)
             result["coverage"]["accounted"] = 100 * done / n if n else 0.0
@@ -821,7 +879,9 @@ def score_report(args, defs, repo):
             cov = now["coverage"]
             note = (f"  (implementation coverage {cov['any']:.1f}%, "
                     f"{cov['strict']:.1f}% strictly, {cov['accounted']:.1f}% "
-                    "accounted for with exemptions)")
+                    "accounted for with exemptions"
+                    + (f", {cov['claimed']:.1f}% claimed counting the code the design names"
+                       if cov.get("claimed", 0) > cov["any"] else "") + ")")
         lines.append(f"  {c.capitalize()}: {now['standards'].get(c, 0)}{note}")
         for r in mine:
             n = now["rules"].get(r, 0)
@@ -948,13 +1008,16 @@ def cmd_status(args, defs, repo):
         pass
     data, score, status = score_report(args, defs, repo)
     cited = data["coverage"]["any"]
-    if cited < 100:
-        # A low score with little cited reads as done; say what it leaves out.
-        score.insert(1, f"  The score counts problems lint can see; {cited:.1f}% of the code "
-                        "cites a design, which it does not count.")
+    claimed = max(cited, data["coverage"].get("claimed", 0))
+    if claimed < 100:
+        # A low score with little traced reads as done; say what it leaves out.
+        score.insert(1, f"  The score counts problems lint can see, not coverage: {cited:.1f}% "
+                        "of the code cites a design" + (
+                            f", and {claimed:.1f}% is claimed by one, cited or named"
+                            if claimed > cited else "") + ".")
     out = (["In progress:"] + lines + [""] if lines else ["Nothing in progress."]) + score
     nxt = None
-    if cited == 0 and not flight["audits"]:
+    if claimed == 0 and not flight["audits"]:
         # Undocumented code matters more than the docs' score [CPO§W45].
         nxt = ("No design claims any of this code. Draft one with an audit: cpo audit next "
                f"{time.strftime('%Y-%m-%d')}. It hands out the code, a file's declarations at a "

@@ -14,15 +14,22 @@ Every command prints JSON unless given `--human`. Read the part you need:
 - **Working an audit**, checking a design against its code: its section.
 - **Asking why** some code exists: the last section.
 
+Your user's instructions and your harness's rules come first. This guide
+describes the tool; it does not assign you work, and where it differs from
+what your user asked, do what they asked.
+
 Run `cpo status` first: it lists any audit or review already in progress.
 
-When a person asks you to adopt Concipio, or to audit a codebase, and
-leaves the rest to you ("set it up and spin", "go find the bugs"), take
-the whole codebase through the audit below: draft a design of all of it,
-have helpers check every section, and work every lead. Do not stop after
-a slice to report; a sample of the code finds only what you already
-suspected. Report when `cpo audit status` says the draft is in order, or
-when a question only a person can answer blocks the rest.
+When a person leaves the extent of the work to you ("set it up and spin",
+"go find the bugs"), propose a milestone before you start, and let them
+choose the scope. `cpo audit propose <name>` sizes one: the code to draft,
+the sections to check, and the leads, as a sentence to put to them. Offer
+a smaller scope, a directory, with `--scope`. When they agree, record it
+with `cpo audit start <name> --scope ... --approved-by "<who>"`, then work
+until `cpo audit status` says the milestone is reached, or until a question
+only they can answer blocks you. Do not stop after a slice to report; a
+sample of the code finds only what you already suspected. If you cannot
+tell whether you were given room to drive, ask.
 
 # Reviewing a change
 
@@ -123,9 +130,10 @@ needs a person's time until the design is ready to sign.
    `cpo config` shows what was inferred. Then record today's problems
    with `cpo lint --write-baseline`, in a commit of its own; if lint finds
    none, there is nothing to record.
-3. If it has none, draft one with an audit: `cpo audit next <date>`.
-   Before it offers any section to check, it hands out the code no design
-   claims, a file's declarations at a time, for you to describe. Start a
+3. If it has none, draft one with an audit, once a person has approved
+   its milestone as above: `cpo audit next <name>`. Before it offers any
+   section to check, it hands out the code no design claims, a file's
+   declarations at a time, for you to describe. Start a
    design doc beside the README, link it from there, and say under its
    title that an agent drafted it from the code and nobody has signed it
    yet. Give it numbered sections, one per mechanism, each a few
@@ -143,19 +151,23 @@ needs a person's time until the design is ready to sign.
    Name functions and files in backticks, as `PschEnqueue` or
    `src/queue/shmem.c`; a section claims the declarations it names, and
    the audit's brief shows them. Declare the doc and record the baseline,
-   as in step 2, then `cpo audit done <date> <unit> --drafted`; it refuses,
+   as in step 2, then `cpo audit done <name> <unit> --drafted`; it refuses,
    naming them, while any of the unit's declarations is undescribed.
    Plumbing that serves no design takes a `CPO§exempt: <why>` comment
-   instead. Do not cite the design from code yet.
+   instead, or, where the code should not name the tool, an `[[exempt]]`
+   entry in `.cpo` with a `path` glob, an optional declaration `name`
+   glob, and `why`. Do not cite the design from code yet; naming code in
+   a section already counts as claiming it.
 4. Check it: the same audit then offers each section to check, as below.
    It never offers you a section you drafted, since that would be no
    second read: start helpers, each with its own `CPO_AGENT`, to check
    them.
 5. Cite as sections are verified, upgrading references to `Implements`
    where the code truly implements the section.
-6. When `cpo audit status` says the draft is in order, ask a person to
-   sign its outline: whether the sections are the right ones, in the
-   right places, not every line.
+6. When `cpo audit status` says the milestone is reached, report to the
+   person who approved it, and ask them to sign the design's outline:
+   whether the sections are the right ones, in the right places, not
+   every line.
 
 Concipio holds docs to three standards: completeness (every line of code
 traces to a design, every doc is reachable), correctness (the docs say what
@@ -169,7 +181,8 @@ fits on a screen, and what matters most stays near the top). The commands:
   than `.cpo-baseline.toml`. After fixing problems, tighten the baseline with
   `cpo lint --write-baseline`. Never rewrite it to hide a new problem.
 - `cpo coverage` shows how much code the design's citations claim, by
-  directory. `--strict` counts only `Implements` and `Tests` citations.
+  directory, and how much it claims counting the code its sections name
+  in backticks. `--strict` counts only `Implements` and `Tests` citations.
 - `cpo helpers` sorts the uncited functions by the design points their
   callers serve, and lists look-alikes that may duplicate one another. Cite
   a helper's point, merge real duplicates, and give shared infrastructure

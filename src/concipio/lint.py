@@ -696,7 +696,8 @@ def audit(root, files, defs, limits, cfg):
     """Every problem, counted by rule, and the debt a project has marked,
     for a score each commit can improve rather than a pass or fail."""
     problems, later = check(root, files, defs, limits, cfg)
-    weights = cfg.get("audit", {}).get("weights", {})
+    audit = cfg.get("audit", {})
+    weights = audit.get("weights", {}) if isinstance(audit, dict) else {}
     counts = {}
     for p in problems:
         counts[p.rule] = counts.get(p.rule, 0) + 1
@@ -719,14 +720,37 @@ CODE_EXTENSIONS = (".c", ".h", ".cc", ".cpp", ".hpp", ".py", ".rb", ".sh", ".bas
 EXEMPT = re.compile(r"^\s*(?:#|//|/?\*|--|;)\s*CPO§exempt:\s*(?P<reason>\S.*?)\s*(?:\*/)?\s*$")
 
 
-def coverage(root, files, defs, exclude=(), strict=False):
+# Implements [CPO§T76]
+def config_exemptions(rules, path, decls):
+    """The declarations `.cpo` exempts in a file, as (first, last, why): a
+    rule with a declaration name glob exempts those it matches, and one
+    without exempts the whole file. A rule must say which files it covers;
+    one with no `path` exempts nothing, rather than everything."""
+    out = []
+    for r in rules:
+        if not r.get("path") or not fnmatch.fnmatch(path, r["path"]):
+            continue
+        why = r.get("why", "")
+        if r.get("name"):
+            out += [(d[0], d[1], why) for d in decls if d[3]
+                    and fnmatch.fnmatch(d[3].split()[-1].split("::")[-1], r["name"])]
+        else:
+            out.append((1, 10 ** 9, why))
+    return out
+
+
+def coverage(root, files, defs, exclude=(), strict=False, named=None):
     """How much code its design citations claim: per file, the non-blank
     lines inside declarations that some comment cites [T8], with tests
     counted apart, and files no parser reads reported as unmeasured.
     Strictly, only implementation and test citations cover code [T6]; a
     project still adopting may count every mention. Code a person exempts
     as serving no design is counted apart again, as accounted for but not
-    covered [T15]."""
+    covered [T15], whether a comment or `.cpo` exempts it [T76]. Given the
+    lines the design names, by file, each row also counts the code cited
+    or named, as claimed [T77]."""
+    rules = docs.config(root).get("exempt", [])
+    named = named or {}
     cited = {}
     for d in defs.values():
         for c in d.citations:
@@ -750,8 +774,13 @@ def coverage(root, files, defs, exclude=(), strict=False):
         marks = [(n, m["reason"]) for n, l in enumerate(lines, 1)
                  for m in [EXEMPT.search(l)] if m]
         row["exempt"], row["exemptions"] = 0, [{"line": n, "reason": r} for n, r in marks]
-        if lang is not None and (f in cited or marks):
+        row["claimed"] = len(named.get(f, set()) & code)
+        listed = [r for r in rules if r.get("path") and fnmatch.fnmatch(f, r["path"])]
+        if lang is not None and (f in cited or marks or listed or f in named):
             decls = spans_mod.declarations(lang, text)
+            by_config = config_exemptions(listed, f, decls)
+            row["exemptions"] += [{"line": a if a > 1 or b < 10 ** 9 else None,
+                                   "reason": why, "by": ".cpo"} for a, b, why in by_config]
 
             def claimed(at):
                 hit = set()
@@ -762,7 +791,11 @@ def coverage(root, files, defs, exclude=(), strict=False):
                 return hit & code
             hit = claimed(cited.get(f, ()))
             row["covered"] = len(hit)
-            row["exempt"] = len(claimed(n for n, _ in marks) - hit)
+            listed_lines = {n for a, b, _ in by_config for n in range(a, min(b, len(lines)) + 1)}
+            traced = (hit | named.get(f, set())) & code
+            # A line the design traces is not counted again as exempt.
+            row["exempt"] = len((claimed(n for n, _ in marks) | (listed_lines & code)) - traced)
+            row["claimed"] = len(traced)
         out.append(row)
     return out
 

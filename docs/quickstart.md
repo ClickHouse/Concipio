@@ -39,14 +39,19 @@ Run these in any repository. None writes a file.
 
 Give your agent this, adjusted to your repository:
 
-> Run `cpo help agent` and follow its section on adopting Concipio. Take
-> the whole codebase through the audit, and tell me when the draft is in
-> order or you need a decision from me.
+> Run `cpo help agent` and follow its section on adopting Concipio.
+> Propose a milestone, and once I agree, work until it is reached or you
+> need a decision from me.
 
-To start smaller, name a directory instead of the whole codebase. With no
-design to start from, the agent drafts one first: the audit hands it the
-code no design describes, a file's declarations at a time, then has other
-agents check each section it wrote, and keeps every lead it notices.
+The agent comes back with a milestone sized by `cpo audit propose`, such as
+"39 units of code (5,862 lines) to describe in a design, each section then
+checked by a second agent; 2 leads to look into". Agree, or name a
+directory to start smaller. With no design to start from, the agent drafts
+one first: the audit hands it the code no design describes, a file's
+declarations at a time, then has other agents check each section it wrote,
+and keeps every lead it notices. A run with nobody to ask, from CI, takes
+its milestone from a `[[milestone]]` entry in `.cpo`, with the audit's
+`name` and a `scope`.
 
 `cpo help agent` is the agent's whole manual: how to declare or draft a
 design, audit it section by section, record what it finds, and cite it

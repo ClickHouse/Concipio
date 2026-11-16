@@ -14,7 +14,7 @@ from . import docs, lint, records, spans
 CLAIM_SECONDS = 2 * 3600
 # Which rules decide what a unit claims; a record made under older ones is
 # fingerprinted again, at its own commit, before it is compared.
-RULES = 3
+RULES = 4
 # What a harness sets for the commands it runs, by the name of its process.
 HARNESS_IDS = [("claude", "CLAUDE_CODE_SESSION_ID"), ("codex", "CODEX_THREAD_ID"),
                ("pi", "PI_SESSION_ID")]
@@ -76,6 +76,15 @@ def code_index(root, files):
     return out
 
 
+TAGGED = re.compile(r"^(?:struct|union|enum|class)\s+")
+
+
+def named(text):
+    """The declaration a backticked name gives: `f()` names `f`, and
+    `struct s` names `s`, as the code index files a record by its name."""
+    return TAGGED.sub("", text.strip().rstrip("()")).strip()
+
+
 # Implements [CPO§Y12, CPO§Y18]
 def claimed_code(root, d, index, tracked):
     """The code a unit claims: declarations its text names in backticks,
@@ -83,7 +92,7 @@ def claimed_code(root, d, index, tracked):
     them. A file the text names is a pointer, not a claim on the whole
     file [CPO§W2]."""
     regions = set()
-    names = {m.group(1).strip().rstrip("()") for m in TICKED.finditer(d.text)}
+    names = {named(m.group(1)) for m in TICKED.finditer(d.text)}
     names = {n for n in names if re.fullmatch(r"[A-Za-z_]\w*", n)}
     for token in names:
         if 0 < len(index.get(token, ())) <= 3:

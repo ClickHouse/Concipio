@@ -271,3 +271,15 @@ def test_an_audit_begun_on_a_design_checks_before_it_drafts(tmp_path, monkeypatc
     monkeypatch.setenv("CPO_AGENT", "a1")
     assert worklist.next_unit(repo, store, load(repo), "trial")["unit"] == "D§1"
     assert worklist.status(repo, store, load(repo), "trial")["drafting"]["units"] == 1
+
+
+def test_a_struct_named_with_its_keyword_is_claimed(tmp_path, monkeypatch):
+    repo, store = bare(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    (repo / "src/glue.c").write_text("struct pin {\n  int n;\n};\n")
+    brief = worklist.next_unit(repo, store, load(repo), "boot", scope=["src/glue.c"])
+    assert brief["unit"] == "draft:src/glue.c:struct pin"
+    (repo / ".cpo").write_text('[[source]]\ndoc = "DESIGN.md"\n')
+    (repo / "DESIGN.md").write_text("# Design\n\n## 1. Pins\n\n`struct pin` counts holders.\n")
+    out = worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
+    assert out["status"] == "drafted" and out["sections"] == ["DESIGN§1"]

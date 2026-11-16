@@ -7,14 +7,22 @@ Concipio (`cpo`) traces code to its design and holds the state of the work
 on both: it records your judgments and checks them, and makes none itself.
 Every command prints JSON unless given `--human`. Read the part you need:
 
-- **Reviewing a change**, so a person can understand it: the numbered
-  sections below.
+- **Reviewing a change**, so a person can understand it, or when asked
+  whether a branch is good: the numbered sections below.
 - **Adopting Concipio in a repository**, with or without a design doc to
   start from: its section, after the review.
 - **Working an audit**, checking a design against its code: its section.
 - **Asking why** some code exists: the last section.
 
 Run `cpo status` first: it lists any audit or review already in progress.
+
+When a person asks you to adopt Concipio, or to audit a codebase, and
+leaves the rest to you ("set it up and spin", "go find the bugs"), take
+the whole codebase through the audit below: draft a design of all of it,
+have helpers check every section, and work every lead. Do not stop after
+a slice to report; a sample of the code finds only what you already
+suspected. Report when `cpo audit status` says the draft is in order, or
+when a question only a person can answer blocks the rest.
 
 # Reviewing a change
 
@@ -115,12 +123,17 @@ needs a person's time until the design is ready to sign.
    `cpo config` shows what was inferred. Then record today's problems
    with `cpo lint --write-baseline`, in a commit of its own; if lint finds
    none, there is nothing to record.
-3. If it has none, write one. Start a design doc beside the README and
-   link it from there. Give it numbered sections, one per mechanism, each
-   a few paragraphs, taking the facts from the code, the user docs, and
-   the tests; say what the code does now, in claims a reader could check.
-   A numbered section is a heading that starts with its number, and a
-   section's number places it: `1a` and `1.2` belong under `1`.
+3. If it has none, draft one with an audit: `cpo audit next <date>`.
+   Before it offers any section to check, it hands out the code no design
+   claims, a file's declarations at a time, for you to describe. Start a
+   design doc beside the README, link it from there, and say under its
+   title that an agent drafted it from the code and nobody has signed it
+   yet. Give it numbered sections, one per mechanism, each a few
+   paragraphs, taking the facts from the code, the user docs, and the
+   tests; say what the code does now, in claims a reader could check.
+   Write about what the code is for, not about the suspicions you started
+   with. A numbered section is a heading that starts with its number, and
+   a section's number places it: `1a` and `1.2` belong under `1`.
 
    ```markdown
    ## 1. The event queue
@@ -128,18 +141,21 @@ needs a person's time until the design is ready to sign.
    ```
 
    Name functions and files in backticks, as `PschEnqueue` or
-   `src/queue/shmem.c`; the audit's brief shows the code a section names.
-   Then declare it and record the baseline, as in step 2. Do not cite it
-   from code yet.
-4. Audit it: `cpo audit next <date>`, as below. A unit's name may be
-   written without its `§`, as `DESIGN1a` or just `1a`, which saves quoting
-   it for the shell. For a design you wrote,
-   the audit is a second, independent read, so give each section to a
-   fresh helper rather than checking your own draft.
+   `src/queue/shmem.c`; a section claims the declarations it names, and
+   the audit's brief shows them. Declare the doc and record the baseline,
+   as in step 2, then `cpo audit done <date> <unit> --drafted`; it refuses,
+   naming them, while any of the unit's declarations is undescribed.
+   Plumbing that serves no design takes a `CPO§exempt: <why>` comment
+   instead. Do not cite the design from code yet.
+4. Check it: the same audit then offers each section to check, as below.
+   It never offers you a section you drafted, since that would be no
+   second read: start helpers, each with its own `CPO_AGENT`, to check
+   them.
 5. Cite as sections are verified, upgrading references to `Implements`
    where the code truly implements the section.
-6. Ask a person to sign the outline of what is verified: whether the
-   sections are the right ones, in the right places, not every line.
+6. When `cpo audit status` says the draft is in order, ask a person to
+   sign its outline: whether the sections are the right ones, in the
+   right places, not every line.
 
 Concipio holds docs to three standards: completeness (every line of code
 traces to a design, every doc is reachable), correctness (the docs say what
@@ -197,19 +213,35 @@ The conventions:
 
 ## Working an audit
 
-An audit is a named worklist of design sections, each checked against the
-code it names or cites. Several agents can work one at a time.
+An audit is a named worklist: code no design claims yet, to draft; design
+sections, each checked against the code it names or cites; and leads,
+things someone noticed that are worth checking. Several agents can work one
+at once.
 
-1. `cpo audit next <name>` claims a section for you and prints its text and
-   code. It resumes your claim if you already hold one.
-2. Check each claim the section makes against the code.
-3. Record the outcome: `cpo audit done <name> <unit> --verified`, or
-   `--finding "<what is wrong, and where>"`, or
+1. `cpo audit next <name>` claims an item for you and prints its brief:
+   code to draft first, then leads, then sections to check. It resumes
+   your claim if you already hold one.
+2. Draft the code, check the lead, or check each claim the section makes
+   against the code. A section an agent drafted may be wrong where the
+   code is right; check both, and say which.
+3. Record the outcome: `cpo audit done <name> <unit> --drafted` for code
+   you described; `--verified`, or `--finding "<what is wrong, and
+   where>"`, for a section or a lead; or
    `--question "<what a person must decide>" --for <whom>`. Recording
    changes no file in the repository, so you can record a finding before
-   the fix and the corrected prose land.
+   the fix and the corrected prose land. A unit's name may be written
+   without its `§`, as `DESIGN1a` or just `1a`.
 4. Repeat. `cpo audit mine <name>` shows what you hold, and
    `cpo audit status <name>` shows the whole audit.
+
+Record what you find when you find it. Anything worth checking that is not
+the item in hand, a suspect barrier, a comment that disagrees with its code,
+a missing test, goes in with `cpo audit note <name> "<what>" --where
+<path>:<line>`; then return to your item. A lead in the audit outlives your
+session and any compaction, and any agent can pick it up; one in your
+summary is lost. An audit starts with a lead for each finding of
+`cpo unreachable` and `cpo unwritten`. Name code in findings by function,
+not by line number alone, since lines move.
 
 If Concipio cannot tell who you are, it prints a `CPO_AGENT` line to export.
 Keep that line in any summary of your work, and give each helper you start

@@ -165,9 +165,10 @@ needs a person's time until the design is ready to sign.
 5. Cite as sections are verified, upgrading references to `Implements`
    where the code truly implements the section.
 6. When `cpo audit status` says the milestone is reached, report to the
-   person who approved it, and ask them to sign the design's outline:
-   whether the sections are the right ones, in the right places, not
-   every line.
+   person who approved it, and ask them to run `cpo sign`, which shows
+   them what changed since they last signed. `cpo sign --list` shows you
+   what awaits them. Never write a `Signed` or `Sig` field yourself: a
+   signature says a person read the text, and only they can say so.
 
 Concipio holds docs to three standards: completeness (every line of code
 traces to a design, every doc is reachable), correctness (the docs say what

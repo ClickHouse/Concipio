@@ -65,12 +65,13 @@ its original text.
   `cpo mv` [W36] edit through these.
 - **CPO§D10:** The text a signature covers is defined over the model,
   so that another implementation can verify it: the bytes of the
-  section's range, with line endings as `\n`, trailing whitespace
-  removed, and the value of every signature field in the range removed,
-  nested sections' included. A sub-section signed later then leaves its
-  parent's signature valid while its text is unchanged. The range
-  depends on headings alone, never on where a list or block ends, since
-  headings are what grammars agree on most.
+  section's range, or the whole doc's, with line endings as `\n` and
+  trailing whitespace removed; every `Sig` field removed, and the
+  `Signed` fields of nested sections; then any attribute list left
+  empty, and any line it leaves blank. A sub-section signed later then
+  leaves its parent's signature valid while its text is unchanged. The
+  range depends on headings alone, never on where a list or block ends,
+  since headings are what grammars agree on most.
 
 ## Switching readers
 

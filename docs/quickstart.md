@@ -76,11 +76,29 @@ something only a person can decide; answering those is your part.
 ## Your part
 
 You review the design's structure, not every line: whether its sections
-are the right ones, in the right places. When a section is right, sign
-its outline with `{Signed="Your name 2026-11-07"}`. When it is not,
-leave a directive instead, such as
-`{Restructure="split this; the queue part belongs in queue.md"}`, and
-an agent will carry it out.
+are the right ones, in the right places. Run `cpo sign`. For each doc
+that is unsigned, or changed since you signed it, it shows what changed
+since your last signature, and asks:
+- **sign**, which writes `{Signed="Your name 2026-11-16T21:03:07Z"}` under
+  the title, to the second;
+- **skip**;
+- or leave a **directive**, such as
+  `{Restructure="split this; the queue part belongs in queue.md"}`,
+  which an agent will carry out.
+
+`cpo sign --sections` signs section by section, and `cpo sign --list`
+shows what awaits you without asking anything.
+
+To make signatures provable, so that no agent can sign for you, sign with
+an SSH key that has a passphrase: set `git config user.signingkey
+~/.ssh/id_ed25519`, the private key, and list each signer's public key in
+`.cpo-signers`, one line per person, as `Your_Name ssh-ed25519 AAAA...`,
+with underscores for the spaces in your name.
+`cpo sign` then adds a `Sig`, and `ssh-keygen` asks for the passphrase
+each time. A key held in ssh-agent signs without asking, so keep this one
+out of it, or name its `.pub` and add it with `ssh-add -c`, which asks
+each time instead. `[signing] require = "ssh"` in `.cpo` makes lint
+reject any signature without a `Sig`.
 
 ## What lands in your repository
 

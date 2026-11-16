@@ -257,21 +257,68 @@ it.
 
 ## Human sign-off
 
+Agents run ahead of people; signing is how a person catches up. A
+signature says that a person read a doc or section as it now stands and
+agrees, so it must name exactly what was read, and must be impossible
+for an agent to write on the person's behalf where the project needs
+that.
+
 - **CPO§W17:** A person reviews a design's structure, not every line:
   whether the docs, sections, and statements are the right ones, in the
-  right places. They sign a doc or section with a field,
-  `{Signed="Josh 2026-11-06"}`, and git records who committed it. This
+  right places. They sign a doc or a section, and the signature is a
+  pair of fields in the attribute list under its title or heading:
+  `{Signed="Josh 2026-11-16T21:03:07Z" Sig="ssh:U1NIU0lH..."}`. This
   refines [M25], which signs only that a doc should exist.
-  - **CPO§W18:** A signature covers the outline by default: titles,
-    headings, and statement names. `Covers=text` signs the whole text.
-    When the part a signature covers changes after the signing commit,
-    lint reports the signature stale, as it does `Verified` [F16].
+  - **CPO§W18:** A signature covers its doc's or section's whole text,
+    as the doc model defines it [D10]: everything under the heading,
+    nested sections included, less every `Sig` and the nested sections'
+    own signatures. When that text changes, lint reports the signature
+    stale. Signing the outline alone, the headings and statement names,
+    is a later option.
 - **CPO§W19:** Instead of signing, a reviewer may leave a directive,
   `{Restructure="split into three; the queue part belongs in queue.md"}`.
   A directive is a to-do point [Y8], and an item of the next plan that
   covers it.
 - **CPO§W20:** `cpo brief --unsigned` lists what awaits signing, from
   the master down, so a person signs the top of the tree first.
+
+### Signing
+
+- **CPO§W50:** `cpo sign [doc or tag ...]` is a review a person starts.
+  For each doc, or with `--sections` each section, that is unsigned or
+  whose signature is stale, it shows what changed since the signature,
+  as a diff, or the whole text if it was never signed, and asks: sign,
+  skip, or leave a directive [W19]. It refuses to run without a
+  terminal to ask on, so an agent cannot answer for the person.
+- **CPO§W51:** The text before is the doc as it stood at the commit
+  that wrote the signature now in it, which git finds by the
+  signature's own value; a signature not yet committed is compared with
+  the last commit.
+- **CPO§W52:** On yes, `cpo sign` writes `Signed` with the signer's name
+  and the time to the second, in UTC, then signs the covered text with
+  it [D10] and writes `Sig`, each as a splice [D8]. The name is
+  `[signing] name` in `.cpo`, else git's `user.name`.
+
+### Proof
+
+- **CPO§W53:** `Sig` holds an SSH signature, made by `ssh-keygen -Y
+  sign` in the namespace `concipio` with the key git signs commits
+  with, `user.signingkey`. Its value is `ssh:` and the signature's
+  base64, on one line. Making it needs the key's passphrase, or a touch
+  of a hardware key, so only a person can sign; a key held unlocked in
+  an agent should be added with `ssh-add -c`, which asks each time.
+  GPG would be `pgp:` the same way, later.
+- **CPO§W54:** Lint checks every signature against a signers file that
+  maps names to public keys, as `ssh-keygen` reads it, with underscores
+  for the spaces in a name: `[signing] signers` in `.cpo`, by default
+  `.cpo-signers`. It is versioned, so adding a signer is a reviewed
+  change. A signature whose text changed is stale; one whose `Sig` does
+  not verify on unchanged text is invalid.
+- **CPO§W55:** `[signing] require = "ssh"` in `.cpo` makes a `Signed`
+  with no valid `Sig` count as unsigned, and lint reports it. An agent
+  that writes a signature for a person then fails lint, and nobody has
+  to tell it so. Without the setting, a signature is trusted as
+  written, as `Verified` is.
 
 ## Progress
 

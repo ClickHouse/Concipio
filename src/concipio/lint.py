@@ -305,6 +305,9 @@ def check(root, files, defs, limits, cfg=None):
     from . import claims
     problems += claims.lint_problems(root, files, defs, cfg or {})
     problems += retired_terms(root, files, (cfg or {}).get("retired", {}))
+    from . import signing
+    problems += signing.lint_problems(root, files)
+    problems += unparsed(root, files)
     lost, later = orphans(root, every, defs, limits["master"], limits["postponed"])
     for f in lost:
         problems.append(Problem(f, 1, "orphan",
@@ -321,6 +324,26 @@ def check(root, files, defs, limits, cfg=None):
                     f"{b['regions']} regions; refine it so no point claims more than "
                     f"{limits['breadth_limit']}", tag, b["implementation"]))
     return sorted(problems, key=lambda p: (p.rule, p.path, p.line)), later
+
+
+# Implements [CPO§D5]
+def unparsed(root, files):
+    """A problem for each stretch of a doc the Markdown grammar could not
+    parse, which Concipio reads as plain text rather than guess at."""
+    out = []
+    for f in files:
+        if not f.endswith(docs.DOC_EXTENSIONS):
+            continue
+        try:
+            text = (root / f).read_text(errors="replace")
+        except (FileNotFoundError, IsADirectoryError):
+            continue
+        for first, last in docs.model(text).errors:
+            out.append(Problem(f, first, "unparsed-markdown",
+                               f"lines {first}-{last} do not parse as Markdown, so Concipio "
+                               "reads them as plain text; fix their markup",
+                               f"{first}", last - first + 1))
+    return out
 
 
 # Implements [CPO§T61]
@@ -376,7 +399,8 @@ def field_problems(root, files, defs, cfg, master):
         known.update(schema.get("require", []))
         known.update(schema.get("fields", {}))
     if s["known"] or s["schemas"]:
-        known.update([s["importance"], s["updated"], s["stale"], s["verified"]])
+        known.update([s["importance"], s["updated"], s["stale"], s["verified"],
+                      "Signed", "Sig", "Restructure"])
     problems = []
     for d in defs.values():
         for e in d.fields.pop("__errors__", []) if "__errors__" in d.fields else []:
@@ -681,7 +705,9 @@ STANDARDS = {
                     "field-syntax", "unverified-critical", "stale-critical",
                     "history-in-heading", "retired-term",
                     "retired-term-live", "unread-heading", "unbacked-claim",
-                    "broken-link"),
+                    "broken-link", "stale-signature", "invalid-signature",
+                    "unproven-signature", "unverifiable-signature",
+                    "unparsed-markdown"),
     "consumability": ("section-length", "statement-length", "breadth", "buried",
                       "heading-in-blockquote"),
 }

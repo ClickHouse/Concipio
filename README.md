@@ -520,3 +520,9 @@ Planned:
 - Assumption vocabulary [M16, M17, R5]
 - Design-doc bootstrapping [M1, M4, M5, R8]
 - Ratification [M25, M26, R12]
+
+## License
+
+Concipio is licensed under the [Apache License 2.0](LICENSE); see
+[NOTICE](NOTICE). The tree-sitter queries it vendors keep their own
+[license](src/concipio/queries/LICENSE).

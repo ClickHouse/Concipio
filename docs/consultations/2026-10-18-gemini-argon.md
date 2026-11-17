@@ -4,7 +4,7 @@ Solicited by Josh with a prompt similar to the Astra consultation, against the s
 
 Concipio is aiming at a brutal, real problem: LLM-generated diffs invert the ergonomics of software engineering, turning authoring into a commodity and review into a cognitive bottleneck. The core insight—using an exhaustive coverage invariant (every span \-\> concept \-\> statement or unjustified) to force small models not to skim, and then using that graph to drive a topological walkthrough for a human—is sharp.
 
-However, there is a tension right down the middle of Concipio.md and trace-format.md: **you are designing two tools at once.** Tool A is a lightweight, ephemeral diff-comprehension engine for reviewing a 1,700-line PR (Ubicloud\#949) without polluting the repo (\[M28\], \[T18\]). Tool B is a heavy, DO-178C-style permanent requirements traceability and cryptographic doc-ratification system (\[M23\], \[M25\], \[T2\]–\[T17\]). Right now, the specification for Tool B is starving the specification for Tool A.
+However, there is a tension right down the middle of Concipio.md and trace-format.md: **you are designing two tools at once.** Tool A is a lightweight, ephemeral diff-comprehension engine for reviewing a 1,700-line PR (the Ubicloud PR) without polluting the repo (\[M28\], \[T18\]). Tool B is a heavy, DO-178C-style permanent requirements traceability and cryptographic doc-ratification system (\[M23\], \[M25\], \[T2\]–\[T17\]). Right now, the specification for Tool B is starving the specification for Tool A.
 
 ## **1\. Prior Art**
 
@@ -42,7 +42,7 @@ However, there is a tension right down the middle of Concipio.md and trace-forma
 
   * **Borrow:** Their formalization of granularity (\[R4\]): concerns attach cleanly to declarations (methods/classes/structs), while sub-method spans ("reads/writes/calls inside a monster function") are treated as exceptions requiring structural projection.
 
-  * **Avoid:** Relying purely on static call graphs to infer concepts—they fail across dynamic dispatch, IPC, or shell boundaries (like Ruby models calling guest scripts in Ubicloud\#949).
+  * **Avoid:** Relying purely on static call graphs to infer concepts—they fail across dynamic dispatch, IPC, or shell boundaries (like Ruby models calling guest scripts in the Ubicloud PR).
 
   * **Status:** Historical academic work (inactive tools, foundational concepts).
 
@@ -96,27 +96,27 @@ However, there is a tension right down the middle of Concipio.md and trace-forma
 
   * **Avoid:** Trying to build a general theorem prover. Treating hoisted cross-site assumptions as shared tags (\[T28\]: producer marks IMPL\[TAG\], consumer marks bare \[TAG\]) is genuinely clever and lightweight—keep that.
 
-## **2\. Design Critique (Ranked by Impact on Milestone 2: Ubicloud\#949)**
+## **2\. Design Critique (Ranked by Impact on Milestone 2: the Ubicloud PR)**
 
 ### **1\. The Missing Middle: No Data Model or Lifecycle for Concept in Review Mode**
 
 * **Tags involved:** \[M1\], \[M3\], \[M4\], \[M21\], \[M28\], \[T6\], \[T18\], \[T19\].
 
-* **The conflict / failure mode:** In "The layers" (\[M1\]), the hierarchy has five tiers: master design \-\> design docs \-\> concepts \-\> comments \-\> code. In \[M3\] and \[M4\], spans belong to *concepts*, and *concepts* trace to *design statements*. However, trace-format.md completely erases the concept layer\! In trace-format.md, design statements get tags (CPIO§M3), and code comments (IMPL\[CPIO§M3\]) or anchors cite those design statement tags directly. There is no syntax, ID scheme, or schema for a *concept* anywhere in trace-format.md. **Concrete failure on Ubicloud\#949:** The PR description has 4 high-level numbered points ("design statements") and \~1,700 lines of Ruby/bash/specs. If 450 lines of Ruby implement Point \#1 across 8 files, mapping all 450 lines directly to Statement \#1 skips the exact thing the project owner needs: *the medium-level concepts* that bridge the 4 high-level points to the Ruby methods. Furthermore, in Review Mode (\[M28\], \[T18\]), nothing is written to the tracked repo—everything lives in .git/cpio/. Yet .git/cpio/'s schema is completely undefined, while trace-format.md spends 100% of its budget defining committed repo artifacts (IMPL\[...\] comments and .cpio TOML) that Review Mode isn't even allowed to use\!
+* **The conflict / failure mode:** In "The layers" (\[M1\]), the hierarchy has five tiers: master design \-\> design docs \-\> concepts \-\> comments \-\> code. In \[M3\] and \[M4\], spans belong to *concepts*, and *concepts* trace to *design statements*. However, trace-format.md completely erases the concept layer\! In trace-format.md, design statements get tags (CPIO§M3), and code comments (IMPL\[CPIO§M3\]) or anchors cite those design statement tags directly. There is no syntax, ID scheme, or schema for a *concept* anywhere in trace-format.md. **Concrete failure on the Ubicloud PR:** The PR description has 4 high-level numbered points ("design statements") and \~1,700 lines of Ruby/bash/specs. If 450 lines of Ruby implement Point \#1 across 8 files, mapping all 450 lines directly to Statement \#1 skips the exact thing the project owner needs: *the medium-level concepts* that bridge the 4 high-level points to the Ruby methods. Furthermore, in Review Mode (\[M28\], \[T18\]), nothing is written to the tracked repo—everything lives in .git/cpio/. Yet .git/cpio/'s schema is completely undefined, while trace-format.md spends 100% of its budget defining committed repo artifacts (IMPL\[...\] comments and .cpio TOML) that Review Mode isn't even allowed to use\!
 
 * **Proposed change:** Explicitly formalize **Concepts** as first-class nodes in .git/cpio/graph.json (or .toml/SQLite) between Design Statements and Code Spans. A Concept has: id, parent\_statement\_id (or parent\_concept\_id, allowing a 2-level tree of high-level \-\> medium-level concepts), title, claim (a falsifiable 1-2 sentence explanation of how the Ruby/C code achieves the parent statement), assumptions, and spans (with roles: entrypoint, core, helper, plumbing, test). When graduating from Review Mode to permanent repo tracking (\[T19\]), you can decide whether concepts become sub-bullets in a design doc or stay ephemeral.
 
 ### **2\. What is an "Effective Span" in a Diff with Deletions, DSLs, and Stacked PRs?**
 
-* **Tags involved:** \[M3\], \[M11\], \[M12\], \[M21\], \[R4\], \[R10\], \[T8\], Milestone 2 (Ubicloud\#949 stacked on \#924).
+* **Tags involved:** \[M3\], \[M11\], \[M12\], \[M21\], \[R4\], \[R10\], \[T8\], Milestone 2 (a Ubicloud PR B stacked on PR A).
 
-* **The conflict / failure mode:** \[M21\] says Concipio gives a deterministic pass/fail verdict on whether "every effective span belongs to a concept or is marked unjustified". \[R4\] and \[T8\] say coverage attaches to AST syntax nodes (functions, methods, classes, blocks). **Concrete failure on Ubicloud\#949:**
+* **The conflict / failure mode:** \[M21\] says Concipio gives a deterministic pass/fail verdict on whether "every effective span belongs to a concept or is marked unjustified". \[R4\] and \[T8\] say coverage attaches to AST syntax nodes (functions, methods, classes, blocks). **Concrete failure on the Ubicloud PR:**
 
   * **Ruby DSLs & Metaprogramming (\[R10\]):** In Sequel/Roda/RSpec (Ubicloud's stack), huge amounts of logic live outside standard def methods: migration blocks (Sequel.migration do ... end), state machine transitions, dataset scopes, or RSpec it / before / let blocks. If your Tree-sitter parser only counts method and class nodes as "effective spans," half the PR is invisible. If it counts every Ruby block (do ... end), every .map { |x| ... } becomes a separate span requiring coverage.
 
   * **Modifications & Deletions in a Diff:** If a PR edits 3 lines inside a 120-line method, or *deletes* a 15-line guard clause (which might be a critical security regression\!), what is the "effective span" that Concipio demands the agent cover? A deleted block no longer exists in the post-image AST\!
 
-  * **Stacked Context (\#924 \-\> \#949):** Milestone 2 notes \#949 is stacked on \#924. If an agent sweeps \#949's diff, \#949 calls helpers or mutates tables introduced in \#924. If Concipio only parses \#949's diff hunks, the agent lacks \#924's concepts.
+  * **Stacked Context (PR A \-\> PR B):** Milestone 2 notes PR B is stacked on PR A. If an agent sweeps PR B's diff, PR B calls helpers or mutates tables introduced in PR A. If Concipio only parses PR B's diff hunks, the agent lacks PR A's concepts.
 
 * **Proposed change:**  
   In Diff/Review Mode (\[M28\]), define the universe of **Effective Spans** at the **diff-hunk / sub-hunk level grouped by enclosing AST container**, *including deleted hunks*. Specifically:
@@ -125,7 +125,7 @@ However, there is a tension right down the middle of Concipio.md and trace-forma
 
   * Every non-trivial deleted hunk (e.g., deleted control flow, deleted method, deleted assertion) is *also* an effective span that must be attached to a concept explaining *why its removal is safe/intended*.
 
-  * To handle \#924 \-\> \#949, allow cpio init-sweep \--base-concepts \<path-to-924-graph\> so the \#949 sweep loads \#924's concept tree as pre-existing parent/sibling concepts (\[M12\], \[R2\]).
+  * To handle PR A \-\> PR B, allow cpio init-sweep \--base-concepts \<path-to-PR-A-graph\> so the PR B sweep loads PR A's concept tree as pre-existing parent/sibling concepts (\[M12\], \[R2\]).
 
 ### **3\. Anchor Mergeability & Uniqueness Contradict Owner Constraints and C/Ruby Reality**
 
@@ -151,9 +151,9 @@ However, there is a tension right down the middle of Concipio.md and trace-forma
 
 ### **5\. Walkthrough Mechanics (\[M18\], \[M19\]) Are Under-Specified for Non-Ruby Readers**
 
-* **Tags involved:** \[M18\], \[M19\], \[R9\], Milestone 2 (Ubicloud\#949).
+* **Tags involved:** \[M18\], \[M19\], \[R9\], Milestone 2 (the Ubicloud PR).
 
-* **The conflict / failure mode:** The first deliverable's success criterion is: *"helping the owner review a \~1,700-line Ruby pull request... in a language the owner does not read, by building from the high-level concepts he knows to the medium-level ones he doesn't, down to the code"*. Currently, \[M18\] and \[M19\] only say: *"A large model chooses a few snippets per concept, across files, and presents them in order. Adapters open those snippets in the reviewer's editor or terminal. The walkthrough always shows code"*. **Concrete failure on Ubicloud\#949:** Showing a C/C++ systems programmer 5 snippets of idiomatic Ruby/Sequel/Roda ("a few snippets per concept") without explaining Ruby's implicit receivers, Sequel dataset methods, or control-flow idioms leaves the reviewer guessing whether the code actually matches the concept claim (\[R9\]). Furthermore, "a few snippets per concept" breaks the exhaustive coverage promise (\[M3\]) during review: if a concept covers 12 spans across 4 files, and the large model only picks 3 snippets to show, where can the reviewer see the other 9 spans if they get suspicious?
+* **The conflict / failure mode:** The first deliverable's success criterion is: *"helping the owner review a \~1,700-line Ruby pull request... in a language the owner does not read, by building from the high-level concepts he knows to the medium-level ones he doesn't, down to the code"*. Currently, \[M18\] and \[M19\] only say: *"A large model chooses a few snippets per concept, across files, and presents them in order. Adapters open those snippets in the reviewer's editor or terminal. The walkthrough always shows code"*. **Concrete failure on the Ubicloud PR:** Showing a C/C++ systems programmer 5 snippets of idiomatic Ruby/Sequel/Roda ("a few snippets per concept") without explaining Ruby's implicit receivers, Sequel dataset methods, or control-flow idioms leaves the reviewer guessing whether the code actually matches the concept claim (\[R9\]). Furthermore, "a few snippets per concept" breaks the exhaustive coverage promise (\[M3\]) during review: if a concept covers 12 spans across 4 files, and the large model only picks 3 snippets to show, where can the reviewer see the other 9 spans if they get suspicious?
 
 * **Proposed change:**  
   Define the walkthrough structure in the upcoming walkthrough design doc around three explicit guarantees:
@@ -164,17 +164,17 @@ However, there is a tension right down the middle of Concipio.md and trace-forma
 
   3. **Interactive Verification Actions:** In the walkthrough skill, allow the human to flag a span or concept as verified, suspect (triggers an immediate deep-dive sub-query on invariants/edge cases), or unjustified.
 
-## **3\. Recommended Minimum Viable Path to Milestone 2 (Ubicloud\#949)**
+## **3\. Recommended Minimum Viable Path to Milestone 2 (the Ubicloud PR)**
 
 Because the project owner wants **evidence, not doctrine** on whether tags and doc hierarchies add toil, do not build trace-format.md's permanent repo annotations, TOML sidecars, regex role parsers, or doc ratification (\[M23\], \[M25\], \[T1\]–\[T17\]) before testing Milestone 2\.
 
-To crush Milestone 2 (Ubicloud\#949), you only need **Review Mode (\[M28\], \[T18\])**:
+To crush Milestone 2 (the Ubicloud PR), you only need **Review Mode (\[M28\], \[T18\])**:
 
-1. **Diff Span Extractor (cpio init \<base\>..\<head\>):** Parses the git diff of \#949 (and optionally \#924), groups changed/added/deleted lines into addressable AST/hunk spans (S1..Sn), and writes .git/cpio/state.json alongside the 4 numbered design statements from the PR description (D1..D4).
+1. **Diff Span Extractor (cpio init \<base\>..\<head\>):** Parses the git diff of PR B (and optionally PR A), groups changed/added/deleted lines into addressable AST/hunk spans (S1..Sn), and writes .git/cpio/state.json alongside the 4 numbered design statements from the PR description (D1..D4).
 
 2. **Agent CLI (cpio status, cpio concept add/update, cpio attach, cpio check):** Lets a sweeping agent create medium-level concepts under D1..D4, attach spans S1..Sn (or mark them unjustified with a reason), record assumptions (\[M16\]), and run cpio check to get the exact list of uncovered spans, orphan concepts, or unimplemented design statements (\[M21\], \[M22\]).
 
 3. **Walkthrough Skill (cpio walkthrough):** Reads the completed .git/cpio/state.json and guides the human top-down from D1..D4 \-\> Concepts \-\> Ruby/bash/spec diffs, ending with the unjustified odds-and-ends report (\[M8\]).
 
-If that workflow makes reviewing \#949 effortless and catches a real bug or smell in the agent-written Ruby, you have hard evidence that the concept-graph invariant works—and *then* you will know exactly which parts of that graph are worth persisting into permanent repo tags (trace-format.md) for Milestone 3 (a kernel module).
+If that workflow makes reviewing PR B effortless and catches a real bug or smell in the agent-written Ruby, you have hard evidence that the concept-graph invariant works—and *then* you will know exactly which parts of that graph are worth persisting into permanent repo tags (trace-format.md) for Milestone 3 (a kernel module).
 

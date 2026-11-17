@@ -51,7 +51,7 @@ Concipio’s most promising contribution is the bridge from a reviewer’s exist
 
 I read [README.md](/Users/josh/Projects/Concipio/README.md) and [trace-format.md](/Users/josh/Projects/Concipio/docs/design/trace-format.md). My recommendation is to make [M28]—the temporary, repository-neutral review mode—the first experiment, and defer committing the trace format until it demonstrates better review for the attention spent.
 
-The Ubicloud scenarios below are proposed failure cases, not defects I verified in the actual PR. I could not retrieve #949 or #924 through the browser.
+The Ubicloud scenarios below are proposed failure cases, not defects I verified in the actual PR. I could not retrieve PR B or PR A through the browser.
 
 For the prior-art list, “maintained” means I found current project or vendor evidence; it does not mean I tested the product. The borrow/avoid judgments are my recommendations.
 
@@ -105,9 +105,9 @@ Change: define a walkthrough step as a bridge from known concept → unfamiliar 
 **2. The reviewed change and its stacked context have no precise identity.**  
 Tags: [M12, M28; T18], Ubicloud milestone.
 
-Scenario: diffing #949 against main includes #924, while diffing against the wrong revision of #924 omits a relevant change. A subsequent rebase makes the saved explanation refer to a different program. Deleted code has no current node to attach to.
+Scenario: diffing PR B against main includes PR A, while diffing against the wrong revision of PR A omits a relevant change. A subsequent rebase makes the saved explanation refer to a different program. Deleted code has no current node to attach to.
 
-Change: start every review with a manifest containing exact base/head revisions, the intended comparison, prerequisite revisions, and a snapshot of the PR description. Represent additions, modifications, and deletions, with old-side and new-side evidence. Classify #924 material as prerequisite context and expose its review status. This is necessary before any coverage number is meaningful.
+Change: start every review with a manifest containing exact base/head revisions, the intended comparison, prerequisite revisions, and a snapshot of the PR description. Represent additions, modifications, and deletions, with old-side and new-side evidence. Classify PR A material as prerequisite context and expose its review status. This is necessary before any coverage number is meaningful.
 
 **3. The coverage mechanism permits the failure [R1] warns about.**  
 Tags: [M3, M7, M21; T6, T8, T15, T16; R1, R4].
@@ -121,7 +121,7 @@ Tags: [M1, M4, M13, M21; T4, T19, T21].
 
 Scenario: the four PR-description points map directly to code. A useful intermediate concept such as “desired capacity versus observed capacity” exists only in agent prose. The tool cannot distinguish that concept from a requirement, locate its explanation, or ensure the walkthrough uses it. [T19] also allows a concept to become a code comment, while [T4] defines identities only in design documents.
 
-Change: define a minimal local review record: concept identity, explanation, broader intent references, prerequisite concepts, evidence bindings, and unresolved questions. Explicitly decide whether a persistent concept is a tagged design statement or a separate entity. For #949, these records can remain entirely in working state; no document promotion is necessary.
+Change: define a minimal local review record: concept identity, explanation, broader intent references, prerequisite concepts, evidence bindings, and unresolved questions. Explicitly decide whether a persistent concept is a tagged design statement or a separate entity. For PR B, these records can remain entirely in working state; no document promotion is necessary.
 
 **5. The design collapses intention, observation, and obligation.**  
 Tags: [M1, M4, M5, M21, M25; T29; R8].
@@ -170,7 +170,7 @@ There is also a literal bug in [T13]: a quote that matched an immutable recorded
 **11. New code cannot satisfy the main-branch anchor rule as written.**  
 Tags: [M23; T10, T14, T26].
 
-Scenario: #949 introduces a method absent from main. Its anchor cannot point to a main-branch commit containing the method. Presubmit then tries to replace the anchor’s commit with the final squash commit. Embedding that commit’s own hash into its tracked tree would change the hash.
+Scenario: PR B introduces a method absent from main. Its anchor cannot point to a main-branch commit containing the method. Presubmit then tries to replace the anchor’s commit with the final squash commit. Embedding that commit’s own hash into its tracked tree would change the hash.
 
 Change: allow review anchors to target the pinned review snapshot. Separate portable source identity from repository-history retention. For persisted annotations, consider source blob identity plus symbol/span selectors, or a previously existing source commit with an explicit retention policy. Drop the requirement that every source revision already be on main. A later metadata commit is possible, but must be specified as such.
 
@@ -230,13 +230,13 @@ Tags: [M21, M23; T30].
 
 Scenario: a Postgres extension cites upstream design unavailable in the current checkout. [T30] calls this unverified rather than failing, while [M21] requires every reference to resolve. If the foreign docs later change, the same local code can acquire a different apparent justification.
 
-Change: pin foreign design identity and revision. Separate unavailable evidence from invalid references, and expose both in the verdict. “Locally complete, with two unverified external dependencies” is meaningful; an unconditional “Explained” is not. This can wait until after #949, but should be decided before the Postgres use case.
+Change: pin foreign design identity and revision. Separate unavailable evidence from invalid references, and expose both in the verdict. “Locally complete, with two unverified external dependencies” is meaningful; an unconditional “Explained” is not. This can wait until after PR B, but should be decided before the Postgres use case.
 
 For the first deliverable, I would make the acceptance test concrete with the following review packet:
 
 | Artifact | What it must establish |
 |---|---|
-| **Review manifest** | Exact #949 comparison, #924 prerequisite snapshot, and frozen intent text. |
+| **Review manifest** | Exact PR B comparison, PR A prerequisite snapshot, and frozen intent text. |
 | **Concept route** | A short path from concepts you already know into mechanisms you need to learn. Candidate mechanisms include desired versus observed capacity, orchestration state, resize ordering, and retry behavior; the actual code must determine the route. |
 | **Evidence cards** | Each important claim has exact source, necessary Ruby explanation, relevant test assertions, and remaining uncertainty. |
 | **Change ledger** | Every changed obligation—including deletions—is accounted for; sampled or unseen material remains visible. |

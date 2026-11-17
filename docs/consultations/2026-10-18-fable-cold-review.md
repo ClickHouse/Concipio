@@ -26,7 +26,7 @@ Where I was unsure: whether Concipio itself ever calls a model. The README descr
 
 **O6. Milestone 1 has no control and the pass criteria are self-graded [R13].** Proposed: sealed questions and reference answers written beforehand by someone or something with full access to the code; written answers graded against the code; baseline by a different reviewer or on a sibling PR.
 
-**O7. T31's renumbering is wrong for stacked branches [T31, T5, M32].** #949 cites an ID #924 minted; #924 is renumbered on rebase; #949 now points at the wrong statement. Proposed: branch-unique provisional IDs, or redirects in working state.
+**O7. T31's renumbering is wrong for stacked branches [T31, T5, M32].** PR B cites an ID PR A minted; PR A is renumbered on rebase; PR B now points at the wrong statement. Proposed: branch-unique provisional IDs, or redirects in working state.
 
 **O8. T35 contradicts T11, T13, and M14 [T35, M36].** Dropping anchors whose scope disappeared is a judgment; mark them stale instead.
 
@@ -34,7 +34,7 @@ Where I was unsure: whether Concipio itself ever calls a model. The README descr
 
 **O10. M6 has no mechanism and no scope [M6, M12, R6].** Proposed: in review mode, scope it to the diff plus symbols it references; repo-wide detection waits for traceability's index.
 
-**O11. Smaller points.** M18 names a Claude skill while M9 promises any harness. M32 does not say whether #924's spans are inside M3, or whether #924's description counts as design text. The pitch diagram shows concepts as a persistent layer while T19 dissolves them. The trace-format doc is far more detailed than the nonexistent review-mode doc, inverting M30's build order.
+**O11. Smaller points.** M18 names a Claude skill while M9 promises any harness. M32 does not say whether PR A's spans are inside M3, or whether PR A's description counts as design text. The pitch diagram shows concepts as a persistent layer while T19 dissolves them. The trace-format doc is far more detailed than the nonexistent review-mode doc, inverting M30's build order.
 
 ## 3. What should be protected
 
@@ -42,6 +42,6 @@ M7 and M8; M19, M34, and M35; M20 with T25; M30 and the trace format's status li
 
 ## 4. Can milestone 1 run as written?
 
-No. Missing, in order: the O1 decision; a review-mode doc (manifest schema, on-disk graph, command set and event log, span unit and Ruby parser, span identity across pushes); statement provenance and how #924 enters the manifest; a test role in review mode; the skill's recording of the reviewer ledger; and the measurement protocol.
+No. Missing, in order: the O1 decision; a review-mode doc (manifest schema, on-disk graph, command set and event log, span unit and Ruby parser, span identity across pushes); statement provenance and how PR A enters the manifest; a test role in review mode; the skill's recording of the reviewer ledger; and the measurement protocol.
 
 A minimal build: a manifest file, a JSON graph under `.git/cpio/`, a Ruby parser yielding declaration spans for the diff, a `check` command enforcing M3 mechanically with M4 and M5 reported rather than gated, a `status` command for M22, and a skill that does all the judgment and writes the ledgers. Everything in the trace format can wait, except T10–T11's span identity, which review mode needs on the first force-push.

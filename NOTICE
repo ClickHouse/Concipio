@@ -1,0 +1,6 @@
+Concipio
+Copyright 2026 ClickHouse, Inc.
+
+The text-object queries in src/concipio/queries are copied from
+nvim-treesitter-textobjects (https://github.com/nvim-treesitter/nvim-treesitter-textobjects),
+under the Apache License 2.0.

@@ -3,6 +3,8 @@ name = "concipio"
 version = "0.0.1"
 description = "Map every changed line of code to the concept it serves"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "jsonschema>=4.26.0",
     "markdown>=3.11.2",

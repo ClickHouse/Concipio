@@ -145,6 +145,12 @@ code. It builds on the kinds of design point [Y1, Y12, Y14], the store
   listed as a citation, with no diff. Code the unit stopped claiming,
   because its text no longer names it, is reported as no longer
   claimed, not as removed.
+  - **CPO§W56:** A record keeps the unit's text and claimed code as they
+    stood when checked, since a rebase or squash may leave the commit
+    it was checked at in no history. The diff is against what was
+    checked. The commits since come from the checked commit, or from
+    the one a rebase made of it, which keeps its subject and author
+    time; when neither is in this history, `cpo audit why` says so.
 - **CPO§W39:** Of a large declaration, a unit claims only what it
   points at: the stretch after a comment inside it that cites the unit,
   the stretches starting at lines that use names the unit's text gives,

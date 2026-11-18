@@ -446,3 +446,56 @@ def test_an_unnamed_declaration_moved_by_an_edit_still_counts(tmp_path, monkeypa
     out = worklist.record(repo, store, load(repo), "boot", brief["unit"], "drafted")
     assert "error" in out, "the moved, undescribed declaration is still found"
 
+
+
+def test_why_maps_a_rebased_check_to_its_new_commit(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-q", "--amend",
+                    "--no-edit", "--date", "@1700000000"], cwd=repo, check=True)
+    worklist.record(repo, store, defs, "trial", "D§1", "verified")
+    checked = worklist.head(repo)
+    # A rebase rewrites the commit: same subject and author time, new
+    # committer time, so a new SHA.
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-q", "--amend",
+                    "--no-edit"], cwd=repo, check=True,
+                   env=dict(os.environ, GIT_COMMITTER_DATE="@1800000000"))
+    (repo / "src/ring.c").write_text("int ring_take(void) {\n  return -1;\n}\n")
+    worklist._live.clear()
+    why = worklist.why_stale(repo, load(repo), worklist.Audit(store, "trial").load(), "D§1")
+    assert why["now_at"] and why["now_at"] != checked and not why["gone"]
+    assert "-  return 0;" in why["changes"][0]["diff"] and "+  return -1;" in why["changes"][0]["diff"]
+
+
+def test_why_shows_the_change_when_the_check_is_gone(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    worklist.record(repo, store, defs, "trial", "D§1", "verified")
+    state = worklist.Audit(store, "trial").load()
+    state["units"]["D§1"]["sha"] = "0" * 12
+    (repo / "src/ring.c").write_text("int ring_take(void) {\n  return -1;\n}\n")
+    worklist._live.clear()
+    why = worklist.why_stale(repo, load(repo), state, "D§1")
+    assert why["gone"] and why["changes"][0]["commits"] == []
+    assert "+  return -1;" in why["changes"][0]["diff"]
+    assert not any(c["what"] == "citations" for c in why["changes"])
+
+
+def test_a_rules_change_refingerprints_at_the_commit_checked_not_a_lookalike(tmp_path, monkeypatch):
+    repo, defs, store = project(tmp_path, monkeypatch)
+    monkeypatch.setenv("CPO_AGENT", "a1")
+    worklist.record(repo, store, defs, "trial", "D§1", "verified")
+    checked = worklist.head(repo)
+    # A rebase that also changed the unit's code: same subject and author
+    # time, different tree.
+    (repo / "src/ring.c").write_text("int ring_take(void) {\n  return 9;\n}\n")
+    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qa", "--amend",
+                    "--no-edit"], cwd=repo, check=True, env=dict(os.environ, GIT_COMMITTER_DATE="@1800000000"))
+    audit = worklist.Audit(store, "trial")
+    state = audit.load()
+    state["units"]["D§1"]["rules"] = worklist.RULES - 1
+    audit.save(state)
+    worklist.reprint(repo, store, "trial")
+    assert worklist.Audit(store, "trial").load()["units"]["D§1"]["sha"] == checked
+    assert worklist.status(repo, store, load(repo), "trial")["counts"].get("stale") == 1, \
+        "the rebased code was never checked"

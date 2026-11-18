@@ -663,7 +663,11 @@ def cmd_worklist(args, defs, repo):
         if r.get("error"):
             emit(r, r["error"], args.json)
             return 1
-        lines = [f"{r['unit']} was {r['status']} at {r['checked']}."]
+        lines = [f"{r['unit']} was {r['status']} at {r['checked']}"
+                 + (f", which is now {r['now_at']}" if r.get("now_at") else
+                    ", which is no longer in this history; the changes below are against what "
+                    "was checked, and the commits since are unknown" if r.get("gone") else "")
+                 + "."]
         lines += describe_changes(r["changes"]) if r["changes"] else [
             "Nothing it claims has changed since."]
         emit(r, "\n".join(lines), args.json)

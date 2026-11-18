@@ -720,12 +720,13 @@ def record(root, store, defs, name, tag, status, note=None, to=None, at=None):
     if status == "drafted":
         return {"error": f"{tag} is a unit to check, not code to draft; record it --verified, "
                          "--finding, or --question"}
-    fp, sha, err = print_at(root, defs, tag, at)
+    fp, sha, err, snap = print_at(root, defs, tag, at)
     if err:
         return {"error": err}
     with store.lock():
         state = audit.load()
         state["units"][tag] = {"status": status, "print": fp, "sha": sha, "rules": RULES,
+                               "snapshot": snap,
                                "by": me or "unknown", "note": note, "for": to,
                                "at": int(time.time())}
         state["claims"].pop(tag, None)
@@ -869,19 +870,31 @@ def unit_at(root, tag, files=None):
 
 def print_at(root, defs, tag, at=None):
     """A unit's fingerprint and commit, here or at an earlier commit, read
-    from a temporary checkout of it. Returns (print, sha, error)."""
+    from a temporary checkout of it, and its snapshot. Returns (print, sha,
+    error, snapshot)."""
     if not at:
         match = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
-        return (match[0][2], head(root), None) if match else \
-            (None, None, f"{tag} is not a unit of this audit")
+        return (match[0][2], head(root), None, snapshot(root, match[0])) if match else \
+            (None, None, f"{tag} is not a unit of this audit", None)
     sha = resolve(root, at)
     if not sha:
-        return None, None, f"{at} is not a commit"
+        return None, None, f"{at} is not a commit", None
     with snapshot_at(root, sha) as (tmp, files):
         then = unit_at(tmp, tag, files)
+        snap = snapshot(tmp, then) if then else None
     if not then:
-        return None, None, f"{tag} was not a unit at {sha}"
-    return then[2], sha, None
+        return None, None, f"{tag} was not a unit at {sha}", None
+    return then[2], sha, None, snap
+
+
+# Implements [CPO§W56]
+def snapshot(root, unit):
+    """A unit's text and claimed code as they stand, kept with a record so
+    that what changed since can be shown without the commit it was checked
+    at, which a rebase or squash may remove from history."""
+    text, code, _, _, mentions = parts(root, unit)
+    return {"text": text, "code": {k: v[0] for k, v in code.items()},
+            "mentions": sorted(mentions)}
 
 
 def parts(root, unit):
@@ -968,6 +981,40 @@ def declared(root, key):
     return bool(found) and any(n == name for _, _, _, n, _ in found[0])
 
 
+def commit_known(root, sha):
+    """Whether git still has a commit, reachable or not."""
+    return bool(sha) and subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+                                        cwd=root, capture_output=True).returncode == 0
+
+
+_live = {}
+
+
+# Implements [CPO§W56]
+def live_commit(root, sha):
+    """The commit a record was checked at, if this history holds it; else
+    the commit a rebase or cherry-pick made of it, which keeps its subject
+    and author time, while git still knows the old one; else None."""
+    key = (str(root), sha)
+    if key in _live:
+        return _live[key]
+    found = None
+    if sha and subprocess.run(["git", "merge-base", "--is-ancestor", sha, "HEAD"], cwd=root,
+                              capture_output=True).returncode == 0:
+        found = sha
+    elif sha:
+        old = subprocess.run(["git", "log", "-1", "--format=%at %s", sha], cwd=root,
+                             capture_output=True, text=True)
+        want = old.stdout.strip() if old.returncode == 0 else ""
+        if want:
+            log = subprocess.run(["git", "log", "--format=%h %at %s", "HEAD"], cwd=root,
+                                 capture_output=True, text=True).stdout
+            found = next((h for h, _, rest in (l.partition(" ") for l in log.splitlines())
+                          if rest == want), None)
+    _live[key] = found
+    return found
+
+
 def commits_since(root, sha, path, lines=None):
     """The commits since `sha` that changed these lines of a file, as they
     stand now, or the whole file. Merges that only carried a change are
@@ -994,27 +1041,38 @@ def why_stale(root, defs, state, tag, context=3):
     now = [u for u in survey(root, defs, (tag,)) if u[0].tag == tag]
     if not now:
         return {"error": f"{tag} is not a unit of this audit"}
-    behind = subprocess.run(["git", "merge-base", "--is-ancestor", rec["sha"], "HEAD"],
-                            cwd=root, capture_output=True).returncode
-    if behind:
-        return {"error": f"{tag} was checked at {rec['sha']}, which this checkout does not "
-                         "contain; run from a checkout that does, or it reads as changed"}
+    live = live_commit(root, rec["sha"])
+    snap = rec.get("snapshot")
+    if not live and not snap:
+        return {"error": f"{tag} was checked at {rec['sha']}, which is no longer in this "
+                         "history, before records kept what they checked; check it again"}
     new = parts(root, now[0])
-    with snapshot_at(root, rec["sha"]) as (tmp, files):
-        then = unit_at(tmp, tag, files)
-        old = parts(tmp, then) if then else ("", {}, now[0][0].path, None, set())
-        # Whether each declaration exists in the old tree, so a unit that
-        # stopped claiming code still there is not reported as code removed.
-        existed = {k for k in set(new[1]) - set(old[1]) if declared(tmp, k)}
+    # The tree checked: the commit itself while git keeps it, else the one a
+    # rebase made of it.
+    tree = rec["sha"] if commit_known(root, rec["sha"]) else live
+    old, existed = None, set()
+    with (snapshot_at(root, tree) if tree else contextlib.nullcontext((None, None))) as \
+            (tmp, files):
+        if tmp is not None:
+            then = unit_at(tmp, tag, files)
+            old = parts(tmp, then) if then else ("", {}, now[0][0].path, None, set())
+        if snap:
+            # What was checked, whatever has become of its commit.
+            old = (snap["text"], {k: (v,) for k, v in snap["code"].items()}, new[2], None,
+                   set(snap.get("mentions", [])))
+        if tmp is not None:
+            # Whether each declaration newly claimed existed then, so a unit
+            # that starts claiming old code is not said to add it.
+            existed = {k for k in set(new[1]) - set(old[1]) if declared(tmp, k)}
 
     def diff(a, b, label):
         return "\n".join(difflib.unified_diff(a.splitlines(), b.splitlines(),
-                                               f"{label} at {rec['sha']}", f"{label} now",
+                                               f"{label} as checked", f"{label} now",
                                                n=context, lineterm=""))
     changes = []
     if old[0] != new[0]:
         changes.append({"what": "text", "where": f"{new[2]} {tag}",
-                        "commits": commits_since(root, rec["sha"], new[2], new[3]),
+                        "commits": commits_since(root, live, new[2], new[3]) if live else [],
                         "diff": prose_diff(old[0], new[0])})
     for key in sorted(set(old[1]) | set(new[1])):
         a, b = old[1].get(key), new[1].get(key)
@@ -1027,7 +1085,7 @@ def why_stale(root, defs, state, tag, context=3):
             what = "newly claimed" if key in existed else "added"
         else:
             what = "no longer claimed" if declared(root, key) else "removed"
-        commits = commits_since(root, rec["sha"], path, b[1:] if b else None)
+        commits = commits_since(root, live, path, b[1:] if b else None) if live else []
         changes.append({"what": what,
                         "where": key,
                         "commits": commits,
@@ -1036,7 +1094,9 @@ def why_stale(root, defs, state, tag, context=3):
     if added or gone:
         changes.append({"what": "citations", "where": ", ".join(
             [f"+{m}" for m in added] + [f"-{m}" for m in gone]), "commits": [], "diff": ""})
-    return {"unit": tag, "checked": rec["sha"], "status": rec["status"], "changes": changes}
+    return {"unit": tag, "checked": rec["sha"], "status": rec["status"], "changes": changes,
+            # Where the check's commit went: rebased into another, or gone.
+            "now_at": live if live and live != rec["sha"] else None, "gone": not live}
 
 
 def reprint(root, store, name):
@@ -1050,6 +1110,10 @@ def reprint(root, store, name):
         if rec.get("rules") != RULES:
             old.setdefault(rec["sha"], []).append(tag)
     for sha, tags in old.items():
+        # The commit checked, which git can read after a rebase while it
+        # keeps the object; never a lookalike, whose tree may differ.
+        if not commit_known(root, sha):
+            continue  # gone; these records read as stale
         with snapshot_at(root, sha) as (tmp, files):
             _, then, _ = docs.load(root=tmp, files=files)
             found = {u[0].tag: u[2] for u in survey(tmp, then, tuple(tags), files)}

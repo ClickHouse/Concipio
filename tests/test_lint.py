@@ -26,6 +26,13 @@ def test_sections_are_measured_without_their_subsections(tmp_path):
     assert check(tmp_path, text, section_limit=5) == []
 
 
+def test_sections_exempt_nested_list_items(tmp_path):
+    item = "- **X§1:** top\n  wrapped\n  - nested\n    wrapped\n  - nested\n"
+    assert check(tmp_path, "# A\n\n" + item, section_limit=2) == []
+    assert check(tmp_path, "# A\n\n" + item + "- more\n", section_limit=2) == [
+        "section-length"]
+
+
 def test_docs_without_statements_are_exempt(tmp_path):
     assert check(tmp_path, "# Notes\n\n" + "words\n" * 100, section_limit=5) == []
 

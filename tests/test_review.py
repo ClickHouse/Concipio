@@ -191,7 +191,7 @@ def test_render_writes_a_design_the_lint_can_measure(repo, capsys):
     run(capsys, "statement", "add", "--quote", "Volumes grow online.")
     run(capsys, "concept", "add", "--name", "Growth", "--parent", "D1", "--claim", "S1")
     run(capsys, "attach", "S1", "C1")
-    _, d = run(capsys, "render", "--section-limit", "3")
+    _, d = run(capsys, "render", "--section-limit", "2")
     text = open(d["path"]).read()
     assert "**REVIEW§D1:**" in text and "**REVIEW§C1:**" in text
     assert [p["rule"] for p in d["problems"]] == ["section-length"]

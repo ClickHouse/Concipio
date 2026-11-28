@@ -85,7 +85,9 @@ mode, the design text may be nothing more than a pull request description.
 
 **CPO§M41:** Every design fits on a screen. A statement longer than about 20
 lines becomes nested statements, and a section with more than about 60 lines
-of its own becomes subsections or a child doc. Sections and files are
+of its own becomes subsections or a child doc. Nested list items are not the
+section's own lines, so refining a statement into nested ones never pushes
+its section over. Sections and files are
 interchangeable for this rule; what matters is that a reader can take in one
 design at a time, then go deeper only where they need to. Docs that define no
 statements, such as notes and reports, are exempt.

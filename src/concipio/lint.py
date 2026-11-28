@@ -11,6 +11,7 @@ from . import docs, spans as spans_mod
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 LINK_DEF = re.compile(r"^\s{0,3}\[[^\]]+\]:\s")
+NESTED_ITEM = re.compile(r"^\s+(?:[-*+]|\d+[.)])\s")
 STATEMENT_LIMIT = 20
 SECTION_LIMIT = 60
 BREADTH_LIMIT = 200
@@ -27,11 +28,26 @@ class Problem:
     value: int = 0
 
 
+def top_level(lines):
+    """Drop nested list items, with their continuation lines, from lines."""
+    out, depth = [], None
+    for line in lines:
+        indent = len(line) - len(line.lstrip())
+        if depth is not None and (not line.strip() or indent > depth):
+            continue
+        depth = None
+        if indent >= 2 and NESTED_ITEM.match(line):
+            depth = indent
+            continue
+        out.append(line)
+    return out
+
+
 def sections(text):
     """Yield (line, level, title, own_lines) for each section, where
     own_lines counts the section's text up to the next heading of any
-    level, so subsections are measured on their own. Text before the first
-    heading is a section of level 0."""
+    level, so subsections are measured on their own, and leaves out nested
+    list items. Text before the first heading is a section of level 0."""
     lines = [line for _, line in docs.prose_lines(text)]
     raw = text.splitlines()
     marks = [(i, len(m[1]), m[2]) for i, line in enumerate(lines)
@@ -39,8 +55,9 @@ def sections(text):
     starts = [(-1, 0, "(top)")] + marks
     for k, (i, level, title) in enumerate(starts):
         end = starts[k + 1][0] if k + 1 < len(starts) else len(raw)
-        # Link reference definitions never render, so they take no room.
-        body = [l for l in raw[i + 1:end] if not LINK_DEF.match(l)]
+        # Link reference definitions never render, so they take no room,
+        # and nested list items are exempt, so hierarchy costs nothing.
+        body = [l for l in top_level(raw[i + 1:end]) if not LINK_DEF.match(l)]
         while body and not body[-1].strip():
             body.pop()
         while body and not body[0].strip():
